@@ -1,0 +1,30 @@
+{
+  "name": "novo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @novo/mobile",
+    "dev:mobile": "npm run dev --workspace @novo/mobile",
+    "dev:web": "npm run build:web && npm run dev:server",
+    "dev:web-ui": "npm run dev --workspace @novo/web",
+    "dev:server": "npm run dev --workspace @novo/server",
+    "web": "npm run web --workspace @novo/mobile",
+    "web:portal": "npm run dev:web",
+    "build:web": "npm run build --workspace @novo/web",
+    "build": "npm run build:web && npm run build --workspace @novo/server",
+    "start": "npm run build && npm run start --workspace @novo/server",
+    "db:reset": "npm run db:reset --workspace @novo/server",
+    "demo": "npm run demo --workspace @novo/server",
+    "android": "npm run android --workspace @novo/mobile",
+    "ios": "npm run ios --workspace @novo/mobile",
+    "build:apk": "powershell -ExecutionPolicy Bypass -File ./scripts/build-apk.ps1",
+    "typecheck": "npm run typecheck --workspace @novo/mobile && npm run typecheck --workspace @novo/web && npm run typecheck --workspace @novo/server",
+    "test": "npm run test --workspace @novo/server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
