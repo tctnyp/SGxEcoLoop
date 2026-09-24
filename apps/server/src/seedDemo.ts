@@ -1,4 +1,4 @@
-import { closeDatabase, databasePath, initializeDatabase, PersistedCollections, resetDatabase } from './database.js';
+import { closeDatabase, databaseTarget, initializeDatabase, PersistedCollections, resetDatabase } from './database.js';
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
 type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; sourceAccessoryId?: AccessoryId; sourceAccessoryName?: string };
@@ -119,7 +119,7 @@ try {
   await resetDatabase();
   await initializeDatabase(collections);
   await closeDatabase();
-  console.log(`Created novo demo database at ${databasePath}`);
+  console.log(`Created novo demo database at ${databaseTarget}`);
   console.log('Demo password: novo2026');
   console.log('Member: amira.tan@demo.novo.sg (10,000 spendable leaves)');
   console.log('Organizer: organizer@demo.novo.sg');
