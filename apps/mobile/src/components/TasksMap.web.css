@@ -1,0 +1,92 @@
+.novo-map,
+.novo-map.maplibregl-map {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  overflow: hidden;
+  background: #eef1ed;
+}
+
+.novo-map-error {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  place-items: center;
+  padding: 28px;
+  color: #52605a;
+  text-align: center;
+}
+
+.novo-map[data-error='true'] .novo-map-error { display: grid; }
+
+.novo-map .maplibregl-popup-content {
+  min-width: 150px;
+  padding: 13px 15px;
+  border-radius: 18px;
+  color: #17352a;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 12px 34px rgba(23, 53, 42, 0.18);
+}
+
+.novo-map .maplibregl-popup-content strong,
+.novo-map .maplibregl-popup-content small {
+  display: block;
+}
+
+.novo-map .maplibregl-popup-content strong { margin-bottom: 3px; font-size: 14px; }
+.novo-map .maplibregl-popup-content small { margin-top: 5px; color: #65716b; font-weight: 700; }
+
+.novo-marker-shell {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  overflow: visible;
+  contain: layout;
+  transform-origin: center;
+}
+
+.novo-location-marker {
+  width: 22px;
+  height: 22px;
+  box-sizing: border-box;
+  border: 3px solid #fff;
+  border-radius: 7px;
+  background: #227a62;
+  box-shadow: 0 5px 14px rgba(23, 53, 42, 0.25);
+}
+
+.novo-event-marker {
+  position: relative;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: 0 7px 18px rgba(23, 53, 42, 0.3);
+}
+
+.novo-event-marker.live::after {
+  position: absolute;
+  inset: -7px;
+  border: 2px solid rgba(231, 78, 67, 0.42);
+  border-radius: 50%;
+  content: '';
+  animation: novo-map-pulse 1.7s ease-out infinite;
+  pointer-events: none;
+}
+
+.novo-user-marker { position: relative; width: 19px; height: 19px; box-sizing: border-box; border: 4px solid #fff; border-radius: 50%; background: #3478f6; box-shadow: 0 3px 12px rgba(29,78,160,.42); }
+.novo-user-marker::after { position: absolute; z-index: -1; inset: -10px; border-radius: 50%; background: rgba(52,120,246,.16); content: ''; }
+
+@keyframes novo-map-pulse {
+  from { opacity: 1; transform: scale(0.76); }
+  to { opacity: 0; transform: scale(1.35); }
+}

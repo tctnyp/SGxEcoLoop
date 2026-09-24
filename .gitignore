@@ -1,0 +1,17 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.env
+.env.local
+coverage/
+artifacts/
+apps/mobile/android/
+apps/mobile/ios/
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.tsbuildinfo
+.DS_Store
+.tmp-apk-inspect/
