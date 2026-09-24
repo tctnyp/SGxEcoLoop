@@ -1,0 +1,20 @@
+[Unit]
+Description=Novo SGxEcoLoop development
+After=network.target yolo-api.service
+Wants=yolo-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Novo/SGxEcoLoop-dev
+Environment=HOST=127.0.0.1
+Environment=PORT=4001
+Environment=NOVO_DB_PATH=/root/Novo/SGxEcoLoop-dev/apps/server/data/novo-dev.sqlite
+Environment=CLIENT_ORIGIN=https://novodev.tancheetiong.com
+EnvironmentFile=/etc/novo-yolo.env
+ExecStart=/usr/bin/npm run dev:web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
