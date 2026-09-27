@@ -1,0 +1,20 @@
+[Unit]
+Description=Novo SGxEcoLoop development
+After=network.target mariadb.service yolo-api.service
+Wants=mariadb.service yolo-api.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/Novo/SGxEcoLoop-dev
+Environment=HOST=127.0.0.1
+Environment=PORT=4001
+Environment=CLIENT_ORIGIN=https://novodev.tancheetiong.com
+EnvironmentFile=/etc/novo-db.env
+EnvironmentFile=/etc/novo-yolo.env
+ExecStart=/usr/bin/npm run dev:web
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
