@@ -60,6 +60,7 @@ type PortalEvent = {
 };
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: 'active' | 'review' | 'suspended' };
 type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean };
+type AiDetection = { label: string; confidence: number; box?: { x1: number; y1: number; x2: number; y2: number } };
 type Submission = {
   id: string;
   userId: string;
@@ -70,6 +71,12 @@ type Submission = {
   points: number | null;
   aiConfidence: number | null;
   aiLabel: string | null;
+  aiAccepted: boolean;
+  aiDetections: AiDetection[];
+  aiProcessingMs: number | null;
+  aiSummary: string | null;
+  aiDecisionReason: string | null;
+  aiModel: string | null;
   createdAt: string;
   rewardApplied: boolean;
   photoFingerprint: string;
@@ -172,8 +179,14 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
     user.friendIds ??= [];
     user.notificationPreferences ??= { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true };
   }
-  for (const submission of submissions.values()) submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
   for (const submission of submissions.values()) {
+    submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
+    submission.aiAccepted ??= submission.status === 'approved' && submission.aiConfidence !== null && submission.aiConfidence >= 0.8;
+    submission.aiDetections ??= [];
+    submission.aiProcessingMs ??= null;
+    submission.aiSummary ??= null;
+    submission.aiDecisionReason ??= null;
+    submission.aiModel ??= null;
     submission.photoFingerprint ??= fingerprintPhoto(submission.photoDataUrl);
     submission.photoEmbedding ??= null;
   }
@@ -393,7 +406,8 @@ function findAccessoryQrTag(tagToken: string) {
 }
 
 async function analyzeSubmission(photoDataUrl: string, description: string) {
-  if (!process.env.YOLO_SERVICE_URL) return { confidence: null as number | null, label: null as string | null, embedding: null as number[] | null, accepted: false };
+  const unavailable = { confidence: null as number | null, label: null as string | null, embedding: null as number[] | null, accepted: false, detections: [] as AiDetection[], processingMs: null as number | null, summary: null as string | null, decisionReason: null as string | null, model: null as string | null };
+  if (!process.env.YOLO_SERVICE_URL) return unavailable;
   try {
     const response = await fetch(process.env.YOLO_SERVICE_URL, {
       method: 'POST',
@@ -401,13 +415,30 @@ async function analyzeSubmission(photoDataUrl: string, description: string) {
       body: JSON.stringify({ image: photoDataUrl, description }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return { confidence: null, label: null, embedding: null, accepted: false };
-    const result = await response.json() as { confidence?: number; label?: string; embedding?: number[]; accepted?: boolean };
+    if (!response.ok) return unavailable;
+    const result = await response.json() as { confidence?: number; label?: string; embedding?: number[]; accepted?: boolean; detections?: Array<{ label?: string; confidence?: number; box?: { x1?: number; y1?: number; x2?: number; y2?: number } }>; processing_ms?: number; summary?: string; decision_reason?: string; model?: string };
     const confidence = typeof result.confidence === 'number' ? Math.max(0, Math.min(1, result.confidence)) : null;
     const embedding = Array.isArray(result.embedding) && result.embedding.length <= 4096 && result.embedding.every(Number.isFinite) ? result.embedding : null;
-    return { confidence, label: result.label?.slice(0, 100) ?? null, embedding, accepted: result.accepted === true && confidence !== null && confidence >= 0.8 };
+    const detections = Array.isArray(result.detections) ? result.detections.flatMap((item): AiDetection[] => {
+      if (typeof item.label !== 'string' || typeof item.confidence !== 'number') return [];
+      const box = item.box && [item.box.x1, item.box.y1, item.box.x2, item.box.y2].every((value) => typeof value === 'number')
+        ? { x1: item.box.x1!, y1: item.box.y1!, x2: item.box.x2!, y2: item.box.y2! }
+        : undefined;
+      return [{ label: item.label.slice(0, 100), confidence: Math.max(0, Math.min(1, item.confidence)), ...(box ? { box } : {}) }];
+    }).slice(0, 20) : [];
+    return {
+      confidence,
+      label: result.label?.slice(0, 100) ?? null,
+      embedding,
+      accepted: result.accepted === true && confidence !== null && confidence >= 0.8,
+      detections,
+      processingMs: typeof result.processing_ms === 'number' && Number.isFinite(result.processing_ms) ? Math.max(0, result.processing_ms) : null,
+      summary: result.summary?.slice(0, 500) ?? null,
+      decisionReason: result.decision_reason?.slice(0, 500) ?? null,
+      model: result.model?.slice(0, 100) ?? null,
+    };
   } catch {
-    return { confidence: null, label: null, embedding: null, accepted: false };
+    return unavailable;
   }
 }
 
@@ -798,7 +829,7 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
     const input = customTaskSchema.parse(request.body);
     const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
     if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
-    const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    const analysis = await analyzeSubmission(input.photoDataUrl, `${input.title}. Member evidence: ${input.description}`);
     if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? 50 : null;
     const submission: Submission = {
@@ -811,6 +842,12 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
       points: awardedPoints,
       aiConfidence: analysis.confidence,
       aiLabel: analysis.label,
+      aiAccepted: analysis.accepted,
+      aiDetections: analysis.detections,
+      aiProcessingMs: analysis.processingMs,
+      aiSummary: analysis.summary,
+      aiDecisionReason: analysis.decisionReason,
+      aiModel: analysis.model,
       createdAt: new Date().toISOString(),
       rewardApplied: Boolean(awardedPoints),
       photoFingerprint,
@@ -838,10 +875,10 @@ app.post('/api/member/tasks/:questId/submit', async (request, response, next) =>
     const input = customTaskSchema.omit({ title: true }).parse(request.body);
     const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
     if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
-    const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    const analysis = await analyzeSubmission(input.photoDataUrl, `${quest.title}. ${quest.description} Member evidence: ${input.description}`);
     if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? quest.points : null;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, aiAccepted: analysis.accepted, aiDetections: analysis.detections, aiProcessingMs: analysis.processingMs, aiSummary: analysis.summary, aiDecisionReason: analysis.decisionReason, aiModel: analysis.model, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
     if (awardedPoints) {
       user.points += awardedPoints;
       user.lifetimePoints += awardedPoints;
@@ -866,7 +903,7 @@ app.post('/api/member/tasks/:questId/quiz', (request, response, next) => {
     quest.completed = true;
     user.points += quest.points;
     user.lifetimePoints += quest.points;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', aiAccepted: true, aiDetections: [], aiProcessingMs: null, aiSummary: 'The member completed the knowledge check successfully.', aiDecisionReason: 'The submitted answer matched the correct response.', aiModel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
     submissions.set(submission.id, submission);
     response.status(201).json({ submission: memberSubmission(submission), user, automated: true });
   } catch (error) {

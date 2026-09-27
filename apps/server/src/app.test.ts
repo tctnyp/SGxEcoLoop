@@ -95,6 +95,47 @@ describe('novo API', () => {
     assert.ok(!queue.body.submissions.some((submission: { id: string }) => submission.id === submitted.body.submission.id));
   });
 
+  it('stores detailed YOLO results and automatically rewards accepted evidence', async () => {
+    const originalFetch = globalThis.fetch;
+    let submittedDescription = '';
+    process.env.YOLO_SERVICE_URL = 'https://yolo.test/analyze';
+    globalThis.fetch = async (_input, init) => {
+      submittedDescription = String(JSON.parse(String(init?.body)).description);
+      return new Response(JSON.stringify({
+        accepted: true,
+        confidence: 0.93,
+        label: 'bottle',
+        embedding: [0.2, 0.4, 0.6],
+        detections: [{ label: 'bottle', confidence: 0.93, box: { x1: 1, y1: 2, x2: 30, y2: 40 } }],
+        processing_ms: 84.5,
+        summary: 'A recyclable bottle is clearly visible.',
+        decision_reason: 'A relevant object exceeded the approval threshold.',
+        model: 'yolov8n.pt',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const { authorization } = await createMember('yolo-details@example.com');
+      const submitted = await request(app).post('/api/member/tasks/custom').set('authorization', authorization).send({ title: 'Recycle a bottle', description: 'Placed a clean bottle in the recycling bin.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('yolo-details-photo').toString('base64')}` });
+      assert.equal(submitted.status, 201);
+      assert.equal(submitted.body.automated, true);
+      assert.equal(submitted.body.submission.status, 'approved');
+      assert.equal(submitted.body.submission.aiAccepted, true);
+      assert.equal(submitted.body.submission.aiDetections[0].label, 'bottle');
+      assert.equal(submitted.body.submission.aiProcessingMs, 84.5);
+      assert.equal(submitted.body.submission.aiModel, 'yolov8n.pt');
+      assert.match(submittedDescription, /Recycle a bottle/);
+
+      const allResults = await request(app).get('/api/portal/submissions?scope=all').set('x-novo-role', 'staff');
+      const stored = allResults.body.submissions.find((submission: { id: string }) => submission.id === submitted.body.submission.id);
+      assert.equal(stored.aiSummary, 'A recyclable bottle is clearly visible.');
+      assert.equal(stored.aiDecisionReason, 'A relevant object exceeded the approval threshold.');
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.YOLO_SERVICE_URL;
+    }
+  });
+
   it('accepts daily task evidence from the generated quest board', async () => {
     const { authorization } = await createMember('daily-task@example.com');
     const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'CALICO-DAILY-0001' });

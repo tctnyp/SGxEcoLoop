@@ -1,6 +1,6 @@
 # novo
 
-novo is a mobile-first waste-reduction system built around an NFC wristband and an expressive in-app animal mascot. The same Express and SQLite backend powers the React Native app and the supporting laptop/operations web portal.
+novo is a mobile-first waste-reduction system built around an NFC wristband and an expressive in-app animal mascot. The same Express backend—using MariaDB in deployment and SQLite for local development and tests—powers the React Native app and the supporting laptop/operations web portal.
 
 ## Included
 
@@ -19,7 +19,7 @@ novo is a mobile-first waste-reduction system built around an NFC wristband and 
 - Wristband collection during onboarding using the searchable Pick! and SingPost POPStation directory
 - An all-digital marketplace with instant mascot accessories, account-bound coupons and charitable contributions
 - Organizer events and attendance, staff reviews/market management, and admin accounts
-- SQLite persistence and a deliberate database-reset command
+- MariaDB deployment persistence, SQLite local/test support, and a deliberate database-reset command
 - Persistent member and Operations sessions that survive server restarts, with expiry cleanup and server-side sign-out revocation
 
 ## Start the system
@@ -140,7 +140,17 @@ The wristband-pickup API imports the complete published Pick! and SingPost POPSt
 
 ## Database and checks
 
-SQLite data lives at `apps/server/data/novo.sqlite`. This command permanently clears current application records:
+Deployed services use MariaDB. Set `NOVO_DB_DRIVER=mariadb` together with `NOVO_DB_HOST`, `NOVO_DB_PORT`, `NOVO_DB_NAME`, `NOVO_DB_USER`, and `NOVO_DB_PASSWORD`. Local development and tests default to SQLite at `apps/server/data/novo.sqlite`; select it explicitly with `NOVO_DB_DRIVER=sqlite` or provide `NOVO_DB_PATH`.
+
+To copy an existing SQLite database into an empty MariaDB database, configure the MariaDB variables and run:
+
+```bash
+npm run db:migrate:sqlite-to-mariadb --workspace @novo/server
+```
+
+Set `NOVO_SQLITE_SOURCE` when the source is not the default SQLite file. The migration refuses to replace a non-empty MariaDB target unless `NOVO_MIGRATION_REPLACE=1` is explicitly set.
+
+This command permanently clears records in the configured database:
 
 ```bash
 npm run db:reset
@@ -174,6 +184,6 @@ npm run build
 ```text
 apps/mobile/   Expo / React Native mobile app and browser preview
 apps/web/      React / Vite member and operations portal
-apps/server/   Express API and SQLite persistence
+apps/server/   Express API with MariaDB and SQLite persistence
 scripts/       APK build workflow
 ```
