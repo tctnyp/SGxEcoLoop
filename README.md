@@ -88,7 +88,8 @@ The older `build:apk:*` commands remain as Android aliases. The general command 
 - Force a builder with `-Mode Local` or `-Mode Cloud`. Android development and beta default to the local toolchain and do not need EAS distribution signing; `-Mode Cloud` remains available when a signed Beta distribution is specifically wanted. iOS always requires cloud building on this Windows workflow. A forced local production Android build creates `artifacts/novo-production.apk`, but should be treated as a device smoke-test build unless you have separately configured production signing.
 - Local mode requires Android Studio, the Android SDK, and JDK 17–23. If needed, pass `-JavaHome 'C:\path\to\jdk-17'`.
 - The selected environment and API URL are compiled into the standalone app through Expo config, so a new APK is required when changing targets.
-- Local APK builds clean the app release task before bundling, reject stale Gradle output, inspect the bundled API URL, and verify the copied file with SHA-256. The final timestamp and hash are printed after every successful build.
+- Local APK builds reject stale Gradle output, inspect the bundled API URL, and verify the copied file with SHA-256. The final timestamp and hash are printed after every successful build.
+- Local builds are incremental by default. Development targets only `arm64-v8a`, preserves Java/Kotlin/CMake/resource outputs, and regenerates only the JavaScript bundle that contains the selected API URL. Use `-CleanBuild` only to recover from corrupted native output, or override device targets with `-AndroidArchitectures 'arm64-v8a,x86_64'` when an emulator or additional ABI is required.
 
 For Google Play production, use the existing EAS `production` profile to create an Android App Bundle. The production APK profile is intended for closed testing and direct installation.
 

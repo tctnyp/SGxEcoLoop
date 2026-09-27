@@ -13,6 +13,8 @@ param(
   [string]$ApiUrl,
   [int]$ServerPort = 4000,
   [string]$JavaHome = $env:NOVO_JAVA_HOME,
+  [string]$AndroidArchitectures,
+  [switch]$CleanBuild,
   [switch]$SkipServerCheck,
   [switch]$VerifyOnly,
   [switch]$ShowConfig
@@ -114,6 +116,18 @@ function Invoke-NativeCapture([string]$FilePath, [string[]]$Arguments) {
   }
 }
 
+function Remove-SafeGeneratedPath([string]$Path, [string]$AllowedRoot) {
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  $fullAllowedRoot = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd('\', '/')
+  $allowedPrefix = "$fullAllowedRoot$([System.IO.Path]::DirectorySeparatorChar)"
+  if (-not $fullPath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to remove generated path outside $fullAllowedRoot`: $fullPath"
+  }
+  if (Test-Path -LiteralPath $fullPath) {
+    Remove-Item -LiteralPath $fullPath -Recurse -Force
+  }
+}
+
 function Find-CompatibleJavaHome {
   $candidateHomes = [System.Collections.Generic.List[string]]::new()
   if ($env:JAVA_HOME) { $candidateHomes.Add($env:JAVA_HOME) }
@@ -176,6 +190,13 @@ $buildAndroid = $Platform -in @('Android', 'All')
 $buildIos = $Platform -in @('iOS', 'All')
 $androidMode = if ($Mode -eq 'Auto') { if ($Environment -in @('Development', 'Beta')) { 'Local' } else { 'Cloud' } } else { $Mode }
 $iosMode = if ($Mode -eq 'Auto') { 'Cloud' } else { $Mode }
+$AndroidArchitectures = if ($AndroidArchitectures) { $AndroidArchitectures.Trim() } elseif ($Environment -eq 'Development') { 'arm64-v8a' } else { 'armeabi-v7a,arm64-v8a,x86,x86_64' }
+$validAndroidArchitectures = @('armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64')
+foreach ($architecture in ($AndroidArchitectures -split ',')) {
+  if ($architecture.Trim() -notin $validAndroidArchitectures) {
+    throw "Unsupported Android architecture '$architecture'. Use one or more of: $($validAndroidArchitectures -join ', ')."
+  }
+}
 if ($buildIos -and $iosMode -eq 'Local') {
   throw 'Local iOS app packaging requires macOS and Xcode. From Windows, use -Mode Cloud (or Auto) so EAS can create the installable iOS build.'
 }
@@ -190,6 +211,8 @@ function Write-ResolvedConfiguration {
   Write-Host "Requested platform: $($Platform.ToLowerInvariant())"
   if ($buildAndroid) { Write-Host "Android builder: $($androidMode.ToLowerInvariant())" }
   if ($buildAndroid) { Write-Host "Android signing: $(if ($androidMode -eq 'Local') { 'local development key' } else { 'EAS distribution credentials' })" }
+  if ($buildAndroid -and $androidMode -eq 'Local') { Write-Host "Android architectures: $AndroidArchitectures" }
+  if ($buildAndroid -and $androidMode -eq 'Local') { Write-Host "Build strategy: $(if ($CleanBuild) { 'clean' } else { 'incremental' })" }
   if ($buildIos) { Write-Host "iOS builder: $($iosMode.ToLowerInvariant())" }
   if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interface) ($($detectedNetwork.Address))" }
 }
@@ -313,25 +336,58 @@ try {
     if ($Environment -eq 'Production') {
       Write-Warning "This local $environmentName APK may use the generated local signing configuration. Use Auto or -Mode Cloud for an EAS-signed distribution APK."
     }
-    # The native directory is generated output (and is ignored by Git). A clean
-    # prebuild prevents an interrupted previous run from poisoning the next APK.
     $npxCommand = (Get-Command npx.cmd -ErrorAction Stop).Source
-    & $npxCommand expo prebuild --platform android --no-install --clean
+    $prebuildArguments = @('expo', 'prebuild', '--platform', 'android', '--no-install')
+    if ($CleanBuild) { $prebuildArguments += '--clean' }
+    & $npxCommand @prebuildArguments
     $prebuildExitCode = $LASTEXITCODE
     $gradleWrapper = Join-Path $mobileRoot 'android\gradlew.bat'
+    if (-not $CleanBuild -and ($prebuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $gradleWrapper))) {
+      Write-Warning 'Incremental Expo prebuild failed. Retrying once with a regenerated Android directory.'
+      & $npxCommand expo prebuild --platform android --no-install --clean
+      $prebuildExitCode = $LASTEXITCODE
+    }
     if ($prebuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $gradleWrapper)) {
       throw "Expo prebuild failed with exit code $prebuildExitCode."
     }
+
+    if (-not $CleanBuild) {
+      # Expo public variables are compiled into the JavaScript bundle, but the
+      # React Native Gradle task does not track shell environment changes. Drop
+      # only those generated outputs so Metro rebundles the selected API URL
+      # while Java, Kotlin, CMake, resources and dependency outputs stay cached.
+      $appBuildRoot = Join-Path $mobileRoot 'android\app\build'
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'generated\assets\createBundleReleaseJsAndAssets') $appBuildRoot
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'generated\res\createBundleReleaseJsAndAssets') $appBuildRoot
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'intermediates\sourcemaps\react\release') $appBuildRoot
+    }
+
     $buildStartedAt = Get-Date
     Push-Location (Join-Path $mobileRoot 'android')
     try {
-      # Expo public environment variables are compiled into the JavaScript bundle.
-      # A plain assembleRelease can reuse a bundle from a previous target because
-      # Gradle does not track those shell variables as task inputs.
-      # A one-shot daemon prevents Java from carrying a transient negative DNS
-      # cache into the next build attempt while still reusing Gradle's files.
-      .\gradlew.bat :app:clean :app:assembleRelease --no-build-cache --no-daemon
-      if ($LASTEXITCODE -ne 0) { throw 'Gradle APK build failed.' }
+      $gradleArguments = @(':app:assembleRelease', "-PreactNativeArchitectures=$AndroidArchitectures")
+      if ($CleanBuild) {
+        $gradleArguments = @(':app:clean') + $gradleArguments + @('--no-build-cache', '--no-daemon')
+      } else {
+        # Keep Gradle's incremental/build caches, but use a one-shot daemon so
+        # scripted builds return immediately instead of leaving inherited
+        # terminal handles open in the background.
+        $gradleArguments += @('--build-cache', '--no-daemon')
+      }
+      if ($Environment -eq 'Development') {
+        # Vital release lint still runs for Beta/Production. Development APKs
+        # prioritize iteration speed and are covered by normal type/test runs.
+        $gradleArguments += @('-x', 'lintVitalRelease')
+      }
+
+      .\gradlew.bat @gradleArguments
+      $gradleExitCode = $LASTEXITCODE
+      if ($gradleExitCode -ne 0) {
+        # Stop the daemon so a transient negative Java DNS cache cannot poison
+        # the developer's next retry.
+        .\gradlew.bat --stop | Out-Null
+        throw "Gradle APK build failed with exit code $gradleExitCode."
+      }
     } finally {
       Pop-Location
     }
@@ -340,7 +396,7 @@ try {
     if (-not (Test-Path -LiteralPath $sourceApk)) { throw "Gradle completed but no APK was found at $sourceApk." }
     $sourceItem = Get-Item -LiteralPath $sourceApk
     if ($sourceItem.LastWriteTimeUtc -lt $buildStartedAt.ToUniversalTime().AddMinutes(-1)) {
-      throw "Gradle returned a stale APK dated $($sourceItem.LastWriteTime). The artifact was not copied."
+      Write-Host "Gradle reused the unchanged APK built at $($sourceItem.LastWriteTime). Its embedded configuration will still be verified before copying."
     }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $apkArchive = [System.IO.Compression.ZipFile]::OpenRead($sourceApk)
