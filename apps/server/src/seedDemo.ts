@@ -6,18 +6,19 @@ type DemoMember = {
   id: string;
   name: string;
   email: string;
-  plushieName: string;
-  plushieType: string;
-  plushiePaired: boolean;
+  mascotName: string;
+  mascotType: 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
+  wristbandColor: 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
+  wristbandPaired: boolean;
+  wristbandPickupLocation: string | null;
   accessories: AccessoryId[];
-  pendingAccessories: AccessoryId[];
   equippedAccessories: AccessoryId[];
   friendIds: string[];
   notificationPreferences: { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
   streak: number;
   points: number;
   lifetimePoints: number;
-  lastPlushieScanAt: string | null;
+  lastWristbandTapAt: string | null;
   questBoardDate: string | null;
   dailyQuests: DailyQuest[];
 };
@@ -41,19 +42,19 @@ const evidence = (title: string, color: string) => {
 };
 
 const today = singaporeDate();
-const questSet = (prefix: string, completed = false, accessory?: { id: AccessoryId; name: string; title: string; description: string }): DailyQuest[] => [
-  accessory ? { id: `${prefix}-wear`, title: accessory.title, description: accessory.description, points: 30, completed, sourceAccessoryId: accessory.id, sourceAccessoryName: accessory.name } : { id: `${prefix}-refill`, title: 'Refill before buying', description: 'Use a reusable bottle or cup today.', points: 20, completed },
-  { id: `${prefix}-sort`, title: 'Sort one recycling load', description: 'Separate clean recyclables from general waste.', points: 30, completed: false },
-  { id: `${prefix}-return`, title: 'Return a drink container', description: 'Use an official Return Right point for an eligible container.', points: 25, completed: false },
+const questSet = (prefix: string, completed = false): DailyQuest[] => [
+  { id: `${prefix}-reusable`, title: 'Bring a reusable', description: 'Show yourself using a reusable bag, container, cup, or bottle.', points: 30, completed },
+  { id: `${prefix}-bcrs`, title: 'Return a BCRS bottle', description: 'Show at least one eligible beverage container being returned through BCRS.', points: 35, completed: false },
+  { id: `${prefix}-build`, title: 'Build with recyclables', description: 'Show yourself making a useful product from recyclable materials.', points: 45, completed: false },
 ];
 
 // Every member has 10,000 spendable leaves. The complete in-app accessory drop costs
 // 1,300 leaves, leaving ample balance for charity contributions during a demo.
 const members: DemoMember[] = [
-  { id: 'member_amira', name: 'Amira Tan', email: 'amira.tan@demo.novo.sg', plushieName: 'Kiko', plushieType: 'Natural calico bear', plushiePaired: true, accessories: ['bright-star', 'petal-pin'], pendingAccessories: ['trail-scarf'], equippedAccessories: ['bright-star', 'petal-pin'], friendIds: ['member_devan', 'member_meilin'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 18, points: 10_000, lifetimePoints: 18_650, lastPlushieScanAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('amira', true, { id: 'bright-star', name: 'Bright star', title: 'Share one bright idea', description: 'Help someone nearby sort an item into the correct waste stream.' }) },
-  { id: 'member_devan', name: 'Devan Nair', email: 'devan.nair@demo.novo.sg', plushieName: 'Pip', plushieType: 'Natural calico bear', plushiePaired: true, accessories: ['bright-star', 'trail-scarf'], pendingAccessories: [], equippedAccessories: ['trail-scarf'], friendIds: ['member_amira'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 11, points: 10_000, lifetimePoints: 14_820, lastPlushieScanAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('devan', false, { id: 'trail-scarf', name: 'Trail scarf', title: 'Repair a textile', description: 'Mend or repurpose a small fabric item instead of discarding it.' }) },
-  { id: 'member_meilin', name: 'Mei Lin Goh', email: 'meilin.goh@demo.novo.sg', plushieName: 'Sunny', plushieType: 'Natural calico bear', plushiePaired: true, accessories: ['bright-star', 'sunny-cap', 'meadow-socks'], pendingAccessories: [], equippedAccessories: ['sunny-cap', 'meadow-socks'], friendIds: ['member_amira', 'member_haris'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 27, points: 10_000, lifetimePoints: 22_410, lastPlushieScanAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('meilin', true, { id: 'sunny-cap', name: 'Sunny cap', title: 'Outdoor litter spot', description: 'Collect five safe pieces of litter while enjoying an outdoor walk.' }) },
-  { id: 'member_haris', name: 'Haris Rahman', email: 'haris.rahman@demo.novo.sg', plushieName: 'Milo', plushieType: 'Natural calico bear', plushiePaired: true, accessories: ['bright-star', 'cloud-mitts', 'tide-loop'], pendingAccessories: [], equippedAccessories: ['cloud-mitts', 'tide-loop'], friendIds: ['member_meilin'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 8, points: 10_000, lifetimePoints: 11_760, lastPlushieScanAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('haris', false, { id: 'cloud-mitts', name: 'Cloud mitts', title: 'Clean before recycling', description: 'Rinse and dry today’s recyclable containers before sorting them.' }) },
+  { id: 'member_amira', name: 'Amira Tan', email: 'amira.tan@demo.novo.sg', mascotName: 'Kiko', mascotType: 'polar-bear', wristbandColor: 'snowy-white', wristbandPaired: true, wristbandPickupLocation: 'Pick! Locker @ Kallang MRT Station', accessories: ['bright-star', 'petal-pin', 'trail-scarf'], equippedAccessories: ['bright-star', 'petal-pin'], friendIds: ['member_devan', 'member_meilin'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 18, points: 10_000, lifetimePoints: 18_650, lastWristbandTapAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('amira', true) },
+  { id: 'member_devan', name: 'Devan Nair', email: 'devan.nair@demo.novo.sg', mascotName: 'Pip', mascotType: 'penguin', wristbandColor: 'charcoal-black', wristbandPaired: true, wristbandPickupLocation: 'POPStation @ General Post Office', accessories: ['bright-star', 'trail-scarf'], equippedAccessories: ['trail-scarf'], friendIds: ['member_amira'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 11, points: 10_000, lifetimePoints: 14_820, lastWristbandTapAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('devan') },
+  { id: 'member_meilin', name: 'Mei Lin Goh', email: 'meilin.goh@demo.novo.sg', mascotName: 'Sunny', mascotType: 'fox', wristbandColor: 'sunset-orange', wristbandPaired: true, wristbandPickupLocation: 'Pick! Locker @ Tampines', accessories: ['bright-star', 'sunny-cap', 'meadow-socks'], equippedAccessories: ['sunny-cap', 'meadow-socks'], friendIds: ['member_amira', 'member_haris'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 27, points: 10_000, lifetimePoints: 22_410, lastWristbandTapAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('meilin', true) },
+  { id: 'member_haris', name: 'Haris Rahman', email: 'haris.rahman@demo.novo.sg', mascotName: 'Milo', mascotType: 'turtle', wristbandColor: 'tropical-green', wristbandPaired: true, wristbandPickupLocation: 'POPStation @ Bedok', accessories: ['bright-star', 'cloud-mitts', 'tide-loop'], equippedAccessories: ['cloud-mitts', 'tide-loop'], friendIds: ['member_meilin'], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 8, points: 10_000, lifetimePoints: 11_760, lastWristbandTapAt: now.toISOString(), questBoardDate: today, dailyQuests: questSet('haris') },
 ];
 
 const users = new Map(members.map((member) => [member.email, member]));
@@ -65,11 +66,11 @@ const portalAccounts = new Map<string, unknown>([
 ]);
 
 const portalEvents = new Map<string, unknown>([
-  ['evt_live_marina', { id: 'evt_live_marina', organizerId: 'organizer_siti', title: 'Marina Bay lunchtime litter walk', location: 'Marina Bay, Singapore', startsAt: minutesAgo(30), durationMinutes: 120, capacity: 50, points: 90, attendees: ['member_amira', 'member_haris'], status: 'open', latitude: 1.2834, longitude: 103.8607 }],
-  ['evt_bishan', { id: 'evt_bishan', organizerId: 'organizer_siti', title: 'Bishan–Ang Mo Kio Park clean-up', location: 'Bishan–Ang Mo Kio Park, River Plains', startsAt: iso(3, 9), durationMinutes: 90, capacity: 40, points: 160, attendees: ['member_amira', 'member_devan', 'member_meilin'], status: 'open', latitude: 1.3646, longitude: 103.8464 }],
-  ['evt_tampines', { id: 'evt_tampines', organizerId: 'organizer_siti', title: 'Tampines repair café', location: 'Our Tampines Hub, Singapore 528523', startsAt: iso(8, 14), durationMinutes: 180, capacity: null, points: 220, attendees: ['member_haris'], status: 'open', latitude: 1.3520, longitude: 103.9402 }],
-  ['evt_east_coast', { id: 'evt_east_coast', organizerId: 'organizer_siti', title: 'East Coast shoreline sort', location: 'East Coast Park, Area C', startsAt: iso(-12, 8), durationMinutes: 120, capacity: 30, points: 180, attendees: ['member_amira', 'member_devan', 'member_meilin', 'member_haris'], status: 'completed', latitude: 1.3008, longitude: 103.9122 }],
-  ['evt_queenstown', { id: 'evt_queenstown', organizerId: 'organizer_siti', title: 'Queenstown swap corner', location: 'Queenstown Community Centre', startsAt: iso(15, 11), durationMinutes: 120, capacity: 60, points: 120, attendees: [], status: 'draft', latitude: 1.2997, longitude: 103.8010 }],
+  ['evt_live_marina', { id: 'evt_live_marina', organizerId: 'organizer_siti', title: 'Marina Bay lunchtime litter walk', location: 'Marina Bay, Singapore', startsAt: minutesAgo(30), durationMinutes: 120, capacity: 50, points: 90, attendees: ['member_amira', 'member_haris'], checkedInUserIds: [], status: 'open', latitude: 1.2834, longitude: 103.8607 }],
+  ['evt_bishan', { id: 'evt_bishan', organizerId: 'organizer_siti', title: 'Bishan–Ang Mo Kio Park clean-up', location: 'Bishan–Ang Mo Kio Park, River Plains', startsAt: iso(3, 9), durationMinutes: 90, capacity: 40, points: 160, attendees: ['member_amira', 'member_devan', 'member_meilin'], checkedInUserIds: [], status: 'open', latitude: 1.3646, longitude: 103.8464 }],
+  ['evt_tampines', { id: 'evt_tampines', organizerId: 'organizer_siti', title: 'Tampines repair café', location: 'Our Tampines Hub, Singapore 528523', startsAt: iso(8, 14), durationMinutes: 180, capacity: null, points: 220, attendees: ['member_haris'], checkedInUserIds: [], status: 'open', latitude: 1.3520, longitude: 103.9402 }],
+  ['evt_east_coast', { id: 'evt_east_coast', organizerId: 'organizer_siti', title: 'East Coast shoreline sort', location: 'East Coast Park, Area C', startsAt: iso(-12, 8), durationMinutes: 120, capacity: 30, points: 180, attendees: ['member_amira', 'member_devan', 'member_meilin', 'member_haris'], checkedInUserIds: ['member_amira', 'member_devan'], status: 'completed', latitude: 1.3008, longitude: 103.9122 }],
+  ['evt_queenstown', { id: 'evt_queenstown', organizerId: 'organizer_siti', title: 'Queenstown swap corner', location: 'Queenstown Community Centre', startsAt: iso(15, 11), durationMinutes: 120, capacity: 60, points: 120, attendees: [], checkedInUserIds: [], status: 'draft', latitude: 1.2997, longitude: 103.8010 }],
 ]);
 
 const marketItems = new Map<string, unknown>([
@@ -82,6 +83,8 @@ const marketItems = new Map<string, unknown>([
   ['market_tide_loop', { id: 'market_tide_loop', name: 'Tide loop', category: 'accessory', price: 520, stock: 10, active: true }],
   ['market_clean_shores', { id: 'market_clean_shores', name: 'Singapore Clean Shores', category: 'charity', price: 100, stock: null, active: true }],
   ['market_food_rescue', { id: 'market_food_rescue', name: 'Neighbourhood Food Rescue', category: 'charity', price: 100, stock: null, active: true }],
+  ['market_green_cafe', { id: 'market_green_cafe', name: '$5 Green Café coupon', category: 'coupon', price: 250, stock: 100, active: true }],
+  ['market_refill_store', { id: 'market_refill_store', name: '10% Refill Store coupon', category: 'coupon', price: 180, stock: 100, active: true }],
 ]);
 
 const submissions = new Map<string, unknown>([
@@ -91,22 +94,15 @@ const submissions = new Map<string, unknown>([
 ]);
 
 const nfcTags = new Map<string, unknown>([
-  ['tag_kiko', { id: 'tag_kiko', token: 'demo_kiko_7YK9wK3vD2qF8mP6xR4sN1cA', label: 'Demo plushie Kiko · D-001', createdBy: 'staff_wei', createdAt: iso(-60), pairedUserId: 'member_amira', pairedAt: iso(-45), status: 'paired' }],
-  ['tag_pip', { id: 'tag_pip', token: 'demo_pip_2mL8qW4sV9bN5kT1yC7rH6zE', label: 'Demo plushie Pip · D-002', createdBy: 'staff_wei', createdAt: iso(-50), pairedUserId: 'member_devan', pairedAt: iso(-38), status: 'paired' }],
-  ['tag_sunny', { id: 'tag_sunny', token: 'demo_sunny_9pR3xB7nK5fD1tV8wM4qL2cH', label: 'Demo plushie Sunny · D-003', createdBy: 'admin_nadia', createdAt: iso(-40), pairedUserId: 'member_meilin', pairedAt: iso(-34), status: 'paired' }],
-  ['tag_milo', { id: 'tag_milo', token: 'demo_milo_6vF2cJ8sA4nQ9yH3kT7wP5dR', label: 'Demo plushie Milo · D-004', createdBy: 'staff_wei', createdAt: iso(-30), pairedUserId: 'member_haris', pairedAt: iso(-25), status: 'paired' }],
-  ['tag_ready', { id: 'tag_ready', token: 'demo_ready_4zN8bC2xL7qW1mV6sK9pR3tF', label: 'Unpaired demo plushie · D-005', createdBy: 'staff_wei', createdAt: iso(-1), pairedUserId: null, pairedAt: null, status: 'ready' }],
+  ['tag_kiko', { id: 'tag_kiko', token: 'demo_kiko_7YK9wK3vD2qF8mP6xR4sN1cA', label: 'Snowy wristband · W-001', wristbandColor: 'snowy-white', mascotType: 'polar-bear', createdBy: 'staff_wei', createdAt: iso(-60), pairedUserId: 'member_amira', pairedAt: iso(-45), status: 'paired' }],
+  ['tag_pip', { id: 'tag_pip', token: 'demo_pip_2mL8qW4sV9bN5kT1yC7rH6zE', label: 'Charcoal wristband · W-002', wristbandColor: 'charcoal-black', mascotType: 'penguin', createdBy: 'staff_wei', createdAt: iso(-50), pairedUserId: 'member_devan', pairedAt: iso(-38), status: 'paired' }],
+  ['tag_sunny', { id: 'tag_sunny', token: 'demo_sunny_9pR3xB7nK5fD1tV8wM4qL2cH', label: 'Sunset wristband · W-003', wristbandColor: 'sunset-orange', mascotType: 'fox', createdBy: 'admin_nadia', createdAt: iso(-40), pairedUserId: 'member_meilin', pairedAt: iso(-34), status: 'paired' }],
+  ['tag_milo', { id: 'tag_milo', token: 'demo_milo_6vF2cJ8sA4nQ9yH3kT7wP5dR', label: 'Tropical wristband · W-004', wristbandColor: 'tropical-green', mascotType: 'turtle', createdBy: 'staff_wei', createdAt: iso(-30), pairedUserId: 'member_haris', pairedAt: iso(-25), status: 'paired' }],
+  ['tag_ready', { id: 'tag_ready', token: 'demo_ready_4zN8bC2xL7qW1mV6sK9pR3tF', label: 'Ocean wristband · W-005', wristbandColor: 'ocean-blue', mascotType: 'bird', createdBy: 'staff_wei', createdAt: iso(-1), pairedUserId: null, pairedAt: null, status: 'ready' }],
 ]);
 
-const accessoryQrTags = new Map<string, unknown>([
-  ['aqr_scarf_ready', { id: 'aqr_scarf_ready', token: 'demo_scarf_QR_7tK2mN9xP4vB6cR8wL1zF5hD', accessoryId: 'trail-scarf', label: 'Trail scarf · A-001', createdBy: 'staff_wei', createdAt: iso(-4), pairedUserId: null, pairedAt: null, status: 'ready' }],
-  ['aqr_star_amira', { id: 'aqr_star_amira', token: 'demo_star_QR_2qW8nC4rV7mL1kP5xT9bH6sA', accessoryId: 'bright-star', label: 'Bright star · A-002', createdBy: 'staff_wei', createdAt: iso(-50), pairedUserId: 'member_amira', pairedAt: iso(-45), status: 'paired' }],
-]);
-
-const fulfillmentOrders = new Map<string, unknown>([
-  ['ord_amira_scarf', { id: 'ord_amira_scarf', userId: 'member_amira', accessoryId: 'trail-scarf', lockerLocation: 'Pick Locker @ Kallang MRT Station · 5 Sims Avenue, Singapore 387405', points: 460, status: 'confirmed', createdAt: iso(-4, 19, 15) }],
-  ['ord_haris_mitts', { id: 'ord_haris_mitts', userId: 'member_haris', accessoryId: 'cloud-mitts', lockerLocation: 'POPStation @ General Post Office · 10 Eunos Road 8, Singapore 408600', points: 280, status: 'confirmed', createdAt: iso(-6, 13, 40) }],
-]);
+const accessoryQrTags = new Map<string, unknown>();
+const fulfillmentOrders = new Map<string, unknown>();
 
 const donations = new Map<string, unknown>([
   ['don_meilin', { id: 'don_meilin', userId: 'member_meilin', causeId: 'clean-shores', causeName: 'Singapore Clean Shores', points: 300, createdAt: iso(-3, 20) }],

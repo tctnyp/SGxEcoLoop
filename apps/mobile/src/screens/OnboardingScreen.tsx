@@ -27,7 +27,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState(draft?.name ?? '');
   const [email, setEmail] = useState(draft?.email ?? '');
-  const [plushieName, setPlushieName] = useState('');
+  const [mascotName, setMascotName] = useState('');
   const [focus, setFocus] = useState('single-use');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -35,11 +35,11 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
 
   const complete = async () => {
     const normalizedName = (name ?? '').trim();
-    const normalizedPlushieName = (plushieName ?? '').trim();
+    const normalizedMascotName = (mascotName ?? '').trim();
     setLoading(true);
     setError('');
     try {
-      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), plushieName: normalizedPlushieName, focus }));
+      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), mascotName: normalizedMascotName, focus }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'We could not create your profile. Try again.');
     } finally {
@@ -52,7 +52,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
           <View style={styles.topbar}>
-            <Pressable onPress={step === 0 ? onBack : () => setStep(0)} style={styles.back} accessibilityLabel="Go back">
+            <Pressable onPress={step === 0 ? onBack : () => setStep(0)} style={styles.back} accessibilityRole="button" accessibilityLabel="Go back">
               <Ionicons name="arrow-back" size={22} color={colors.ink} />
             </Pressable>
             <Logo compact />
@@ -67,15 +67,15 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                   <View style={styles.blob} />
                   <Plushie />
                 </View>
-                <Text style={styles.eyebrow}>YOUR LITTLE CHANGE-MAKER</Text>
-                <Text style={styles.title}>Name your new pal</Text>
-                <Text style={styles.body}>They’ll grow with every low-waste choice you make. What should we call you both?</Text>
+                <Text style={styles.eyebrow}>YOUR IN-APP CHANGE-MAKER</Text>
+                <Text style={styles.title}>Name your mascot</Text>
+                <Text style={styles.body}>Your wristband colour will reveal its animal after pairing. Every mascot shares the same accessory fit.</Text>
                 <View style={styles.fields}>
                   <TextField label="Your name" value={name} onChangeText={setName} placeholder="What should we call you?" icon="person-outline" />
                   <TextField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" icon="mail-outline" />
-                  <TextField label="Plushie name" value={plushieName} onChangeText={setPlushieName} placeholder="Name your plushie" icon="leaf-outline" />
+                  <TextField label="Mascot name" value={mascotName} onChangeText={setMascotName} placeholder="Name your in-app mascot" icon="leaf-outline" />
                 </View>
-                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(plushieName ?? '').trim() || !email.includes('@')} icon="arrow-forward" />
+                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@')} icon="arrow-forward" />
               </>
             ) : (
               <>
@@ -92,7 +92,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                   {focuses.map((item) => {
                     const selected = focus === item.id;
                     return (
-                      <Pressable key={item.id} onPress={() => setFocus(item.id)} style={[styles.choice, selected && styles.choiceSelected]}>
+                      <Pressable key={item.id} onPress={() => setFocus(item.id)} accessibilityRole="radio" accessibilityState={{ checked: selected }} accessibilityLabel={item.label} style={[styles.choice, selected && styles.choiceSelected]}>
                         <View style={[styles.choiceIcon, selected && styles.choiceIconSelected]}><Ionicons name={item.icon} size={23} color={colors.ink} /></View>
                         <Text style={styles.choiceText}>{item.label}</Text>
                         <Ionicons name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={selected ? colors.forest : colors.outline} />

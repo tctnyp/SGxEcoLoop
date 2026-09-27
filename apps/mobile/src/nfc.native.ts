@@ -3,7 +3,7 @@ import NfcManager, { Ndef, NfcEvents, NfcTech, TagEvent } from 'react-native-nfc
 export class NfcUnavailableError extends Error {}
 
 function tokenFromValue(value: string) {
-  const match = value.trim().match(/(?:novo:\/\/plushie\/|https:\/\/[^/]+\/nfc\/)([A-Za-z0-9_-]{24,200})/i);
+  const match = value.trim().match(/(?:novo:\/\/wristband\/|https:\/\/[^/]+\/nfc\/)([A-Za-z0-9_-]{24,200})/i);
   return match?.[1] ?? null;
 }
 
@@ -26,10 +26,10 @@ function tokenFromTag(tag: TagEvent | null) {
 async function prepareNfc() {
   if (!(await NfcManager.isSupported())) throw new NfcUnavailableError('This phone does not support NFC.');
   await NfcManager.start();
-  if (!(await NfcManager.isEnabled())) throw new NfcUnavailableError('Turn on NFC in your phone settings to greet your plushie.');
+  if (!(await NfcManager.isEnabled())) throw new NfcUnavailableError('Turn on NFC in your phone settings to tap your novo wristband.');
 }
 
-export async function startNovoPlushieListener(onToken: (token: string) => void, onInvalidTag?: () => void) {
+export async function startNovoWristbandListener(onToken: (token: string) => void, onInvalidTag?: () => void) {
   await prepareNfc();
   let active = true;
   let lastToken = '';
@@ -48,7 +48,7 @@ export async function startNovoPlushieListener(onToken: (token: string) => void,
     onToken(token);
   });
   try {
-    await NfcManager.registerTagEvent({ alertMessage: 'Bring your phone near the novo patch.', invalidateAfterFirstRead: false });
+    await NfcManager.registerTagEvent({ alertMessage: 'Bring your novo wristband near your phone.', invalidateAfterFirstRead: false });
   } catch (error) {
     NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
     throw error;
@@ -60,13 +60,13 @@ export async function startNovoPlushieListener(onToken: (token: string) => void,
   };
 }
 
-export async function scanNovoPlushieTag() {
+export async function scanNovoWristbandTag() {
   await prepareNfc();
   try {
-    await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Hold your phone near the novo patch.' });
+    await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Hold your novo wristband near your phone.' });
     const token = tokenFromTag(await NfcManager.getTag());
     if (token) return token;
-    throw new Error('This NFC tag is not a prepared novo plushie tag.');
+    throw new Error('This NFC tag is not a prepared novo wristband.');
   } finally {
     await NfcManager.cancelTechnologyRequest().catch(() => undefined);
   }

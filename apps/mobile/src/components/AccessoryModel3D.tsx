@@ -3,7 +3,7 @@ import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { AccessoryId } from '../types';
 
-export function AccessoryModel3D({ id }: { id: AccessoryId }) {
+export function AccessoryModel3D({ id, animate = true }: { id: AccessoryId; animate?: boolean }) {
   const group = useRef<THREE.Group>(null);
   const star = useMemo(() => {
     const shape = new THREE.Shape();
@@ -18,7 +18,7 @@ export function AccessoryModel3D({ id }: { id: AccessoryId }) {
   }, []);
 
   useFrame((state, delta) => {
-    if (!group.current) return;
+    if (!group.current || !animate) return;
     group.current.rotation.y += delta * 0.48;
     group.current.position.y = Math.sin(state.clock.elapsedTime * 1.4) * 0.06;
   });
@@ -36,6 +36,6 @@ export function AccessoryModel3D({ id }: { id: AccessoryId }) {
   );
 }
 
-export function AccessoryWorld({ id }: { id: AccessoryId }) {
-  return <><ambientLight intensity={2} /><directionalLight position={[3, 5, 5]} intensity={2.4} color="#FFF8E8" /><directionalLight position={[-4, 1, 2]} intensity={1} color="#D8E5FF" /><AccessoryModel3D id={id} /></>;
+export function AccessoryWorld({ id, animate = true }: { id: AccessoryId; animate?: boolean }) {
+  return <><ambientLight intensity={2} /><directionalLight position={[3, 5, 5]} intensity={2.4} color="#FFF8E8" /><directionalLight position={[-4, 1, 2]} intensity={1} color="#D8E5FF" /><AccessoryModel3D id={id} animate={animate} /></>;
 }

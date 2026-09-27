@@ -1,9 +1,10 @@
 import { Canvas } from '@react-three/fiber/native';
+import { memo } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { AccessoryId } from '../types';
-import { BearWorld } from './BearModel3D';
+import { AccessoryId, MascotType } from '../types';
+import { MascotWorld } from './BearModel3D';
 
-export function PlushieScene({ accessories, manualRotation, isInteracting, autoRotate }: { accessories: AccessoryId[]; manualRotation?: number; isInteracting?: boolean; autoRotate?: boolean }) {
+export const PlushieScene = memo(function PlushieScene({ mascotType, accessories, manualRotationX, manualRotationY, isInteracting, autoRotate }: { mascotType: MascotType; accessories: AccessoryId[]; manualRotationX?: number; manualRotationY?: number; isInteracting?: boolean; autoRotate?: boolean }) {
   const normalizeExpoGlLogs = ({ gl }: { gl: { getContext: () => WebGLRenderingContext } }) => {
     const context = gl.getContext();
     const shaderLog = context.getShaderInfoLog?.bind(context);
@@ -17,11 +18,16 @@ export function PlushieScene({ accessories, manualRotation, isInteracting, autoR
 
   return (
     <View style={styles.wrap}>
-      <Canvas camera={{ position: [0, 0.1, 5.7], fov: 38 }} onCreated={normalizeExpoGlLogs}>
-        <BearWorld accessories={accessories} manualRotation={manualRotation} isInteracting={isInteracting} autoRotate={autoRotate} />
-      </Canvas>
+      <View style={styles.scaledCanvas}>
+        <Canvas camera={{ position: [0, 0.1, 5.7], fov: 38 }} frameloop="demand" gl={{ alpha: true, antialias: false, powerPreference: 'high-performance' }} onCreated={normalizeExpoGlLogs}>
+          <MascotWorld mascotType={mascotType} accessories={accessories} manualRotationX={manualRotationX} manualRotationY={manualRotationY} isInteracting={isInteracting} autoRotate={autoRotate} />
+        </Canvas>
+      </View>
     </View>
   );
-}
+});
 
-const styles = StyleSheet.create({ wrap: { flex: 1, width: '100%', pointerEvents: 'none' } });
+const styles = StyleSheet.create({
+  wrap: { flex: 1, width: '100%', pointerEvents: 'none', overflow: 'visible' },
+  scaledCanvas: { position: 'absolute', width: '72%', height: '72%', left: '14%', top: '14%', transform: [{ scale: 1.38 }] },
+});

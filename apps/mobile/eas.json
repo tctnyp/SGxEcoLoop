@@ -3,13 +3,52 @@
     "version": ">= 12.0.0"
   },
   "build": {
-    "preview": {
+    "development-android": {
       "distribution": "internal",
+      "env": {
+        "NOVO_BUILD_ENV": "development"
+      },
       "android": {
         "buildType": "apk"
       }
     },
+    "development-ios": {
+      "distribution": "internal",
+      "env": {
+        "NOVO_BUILD_ENV": "development"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "production-apk": {
+      "distribution": "internal",
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production-ios": {
+      "distribution": "internal",
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
     "production": {
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
+      },
       "android": {
         "buildType": "app-bundle"
       }

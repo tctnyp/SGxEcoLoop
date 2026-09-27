@@ -1,11 +1,13 @@
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { initializeDatabase, persistDatabase, PersistedCollections } from './database.js';
+import { fallbackLockerLocations, getLockerDirectory, searchLockerDirectory } from './lockerDirectory.js';
+import { getReturnRightDirectory } from './returnRightDirectory.js';
 
 const users = new Map<string, User>();
 
@@ -13,27 +15,32 @@ type User = {
   id: string;
   name: string;
   email: string;
-  plushieName: string;
-  plushieType: string;
-  plushiePaired: boolean;
+  mascotName: string;
+  mascotType: MascotType;
+  wristbandColor: WristbandColor;
+  wristbandPaired: boolean;
+  wristbandPickupLocation: string | null;
   accessories: AccessoryId[];
-  pendingAccessories: AccessoryId[];
   equippedAccessories: AccessoryId[];
   friendIds: string[];
   notificationPreferences: NotificationPreferences;
   streak: number;
   points: number;
   lifetimePoints: number;
-  lastPlushieScanAt: string | null;
+  lastWristbandTapAt: string | null;
   questBoardDate: string | null;
   dailyQuests: DailyQuest[];
+  coupons: RedeemedCoupon[];
 };
 
 type NotificationPreferences = { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
 
-type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; sourceAccessoryId?: AccessoryId; sourceAccessoryName?: string };
+type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; lesson?: { title: string; summary: string; question: string; options: string[] } };
+type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
+type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
+type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 
 type PortalRole = 'organizer' | 'staff' | 'admin';
 type PortalEvent = {
@@ -46,12 +53,13 @@ type PortalEvent = {
   capacity: number | null;
   points: number;
   attendees: string[];
+  checkedInUserIds: string[];
   status: 'draft' | 'open' | 'completed';
   latitude: number | null;
   longitude: number | null;
 };
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: 'active' | 'review' | 'suspended' };
-type MarketItem = { id: string; name: string; category: 'accessory' | 'charity'; price: number; stock: number | null; active: boolean };
+type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean };
 type Submission = {
   id: string;
   userId: string;
@@ -64,12 +72,18 @@ type Submission = {
   aiLabel: string | null;
   createdAt: string;
   rewardApplied: boolean;
+  photoFingerprint: string;
+  photoEmbedding: number[] | null;
   questId?: string;
   questBoardDate?: string | null;
 };
+function memberSubmission(submission: Submission) {
+  const { photoDataUrl: _photoDataUrl, ...summary } = submission;
+  return summary;
+}
 type FulfillmentOrder = { id: string; userId: string; accessoryId: AccessoryId; lockerLocation: string; points: number; status: 'confirmed' | 'tagged' | 'dispatched' | 'delivered' | 'cancelled'; createdAt: string };
 type Donation = { id: string; userId: string; causeId: string; causeName: string; points: number; createdAt: string };
-type NfcTag = { id: string; token: string; label: string; createdBy: string; createdAt: string; pairedUserId: string | null; pairedAt: string | null; status: 'ready' | 'paired' | 'retired' };
+type NfcTag = { id: string; token: string; label: string; wristbandColor: WristbandColor; mascotType: MascotType; createdBy: string; createdAt: string; pairedUserId: string | null; pairedAt: string | null; status: 'ready' | 'paired' | 'retired' };
 type AccessoryQrTag = { id: string; token: string; accessoryId: AccessoryId; label: string; createdBy: string; createdAt: string; pairedUserId: string | null; pairedAt: string | null; status: 'ready' | 'paired' | 'retired'; orderId?: string | null };
 type WebSession = { token: string; accountId: string; role: PortalAccount['role']; expiresAt: number };
 type MobileSession = { token: string; userId: string; expiresAt: number };
@@ -97,6 +111,9 @@ const persistedCollections = {
   donations,
   nfcTags,
   accessoryQrTags,
+  webSessions,
+  mobileSessions,
+  mobileHandoffs,
 } as unknown as PersistedCollections;
 
 function coordinatesForSingaporeLocation(location: string) {
@@ -125,18 +142,49 @@ function coordinatesForSingaporeLocation(location: string) {
 
 const databaseReady = initializeDatabase(persistedCollections).then(async () => {
   let changed = false;
+  const now = Date.now();
+  for (const [token, session] of webSessions) {
+    if (session.expiresAt > now) continue;
+    webSessions.delete(token);
+    changed = true;
+  }
+  for (const [token, session] of mobileSessions) {
+    if (session.expiresAt > now) continue;
+    mobileSessions.delete(token);
+    changed = true;
+  }
+  for (const [token, handoff] of mobileHandoffs) {
+    if (handoff.expiresAt > now && !handoff.consumed) continue;
+    mobileHandoffs.delete(token);
+    changed = true;
+  }
   for (const user of users.values()) {
-    user.lastPlushieScanAt ??= null;
+    const legacy = user as User & { plushieName?: string; plushieType?: string; plushiePaired?: boolean; lastPlushieScanAt?: string | null; pendingAccessories?: AccessoryId[] };
+    user.mascotName ??= legacy.plushieName || 'Nova';
+    user.mascotType ??= 'polar-bear';
+    user.wristbandColor ??= 'snowy-white';
+    user.wristbandPaired ??= legacy.plushiePaired ?? false;
+    user.wristbandPickupLocation ??= null;
+    user.lastWristbandTapAt ??= legacy.lastPlushieScanAt ?? null;
     user.questBoardDate ??= null;
     user.dailyQuests ??= [];
-    user.pendingAccessories ??= [];
+    user.coupons ??= [];
     user.friendIds ??= [];
     user.notificationPreferences ??= { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true };
   }
   for (const submission of submissions.values()) submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
+  for (const submission of submissions.values()) {
+    submission.photoFingerprint ??= fingerprintPhoto(submission.photoDataUrl);
+    submission.photoEmbedding ??= null;
+  }
   for (const order of fulfillmentOrders.values()) order.status ??= 'confirmed';
+  for (const tag of nfcTags.values()) {
+    tag.wristbandColor ??= 'snowy-white';
+    tag.mascotType ??= WRISTBAND_MASCOTS[tag.wristbandColor];
+  }
   for (const tag of accessoryQrTags.values()) tag.orderId ??= null;
   for (const event of portalEvents.values()) {
+    event.checkedInUserIds ??= [];
     if (typeof event.latitude === 'number' && typeof event.longitude === 'number') continue;
     const coordinates = coordinatesForSingaporeLocation(event.location);
     event.latitude = coordinates.latitude;
@@ -169,12 +217,13 @@ const emailStatusSchema = z.object({ email: z.string().email() });
 const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
-  plushieName: z.string().trim().min(1).max(30),
+  mascotName: z.string().trim().min(1).max(30),
   focus: z.enum(['single-use', 'food', 'repair']),
 });
 
-const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200) });
-const provisionTagSchema = z.object({ label: z.string().trim().min(2).max(80) });
+const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200), pickupLocation: z.string().trim().min(3).max(240).optional() });
+const wristbandColorSchema = z.enum(['snowy-white', 'charcoal-black', 'sunset-orange', 'tropical-green', 'ocean-blue']);
+const provisionTagSchema = z.object({ label: z.string().trim().min(2).max(80), wristbandColor: wristbandColorSchema.default('snowy-white') });
 const provisionAccessoryTagSchema = z.object({ label: z.string().trim().min(2).max(80), accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']), orderId: z.string().min(1).optional() });
 const customTaskSchema = z.object({
   title: z.string().trim().min(3).max(80),
@@ -194,25 +243,27 @@ const eventSchema = z.object({
   latitude: z.number().min(-90).max(90).nullable().optional(),
   longitude: z.number().min(-180).max(180).nullable().optional(),
 });
-const checkInSchema = z.object({ attendeeId: z.string().min(1) });
+const checkInSchema = z.object({ tagToken: z.string().trim().min(24).max(200) });
 const accountPatchSchema = z.object({ name: z.string().trim().min(1).max(80).optional(), email: z.string().email().optional(), role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(), status: z.enum(['active', 'review', 'suspended']).optional() }).refine((value) => Object.keys(value).length > 0, 'Provide at least one account change.');
 const accountCreateSchema = z.object({ name: z.string().trim().min(1).max(80), email: z.string().email(), role: z.enum(['member', 'organizer', 'staff', 'admin']), status: z.enum(['active', 'review', 'suspended']).default('active') });
-const marketSchema = z.object({ name: z.string().trim().min(2).max(80), category: z.enum(['accessory', 'charity']), price: z.number().int().min(0).max(100000), stock: z.number().int().min(0).nullable(), active: z.boolean().default(true) });
+const marketSchema = z.object({ name: z.string().trim().min(2).max(80), category: z.enum(['accessory', 'charity', 'coupon']), price: z.number().int().min(0).max(100000), stock: z.number().int().min(0).nullable(), active: z.boolean().default(true) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'tagged', 'dispatched', 'delivered', 'cancelled']) });
 const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000) });
 const handoffExchangeSchema = z.object({ handoffToken: z.string().min(10) });
 const memberAccessorySchema = z.object({ accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']) });
-const memberPurchaseSchema = memberAccessorySchema.extend({ lockerLocation: z.string().trim().min(3).max(120) });
+const memberPurchaseSchema = memberAccessorySchema;
 const contributionSchema = z.object({ points: z.number().int().min(100).max(10000), causeId: z.string().trim().min(2).max(60).default('clean-shores'), causeName: z.string().trim().min(2).max(100).default('Singapore Clean Shores') });
+const couponSchema = z.object({ offerId: z.string().trim().min(2).max(60), name: z.string().trim().min(2).max(100), points: z.number().int().min(1).max(10000) });
+const quizSubmissionSchema = z.object({ answer: z.string().trim().min(1).max(160) });
 const notificationPreferencesSchema = z.object({ dailyGreeting: z.boolean(), tasks: z.boolean(), events: z.boolean(), friends: z.boolean(), orders: z.boolean() });
 
 const questTemplates = [
-  { title: 'Refill before buying', description: 'Use a reusable bottle or cup today.', points: 20 },
-  { title: 'Sort one recycling load', description: 'Separate clean recyclables from general waste.', points: 30 },
-  { title: 'Choose a package-free option', description: 'Avoid one piece of single-use packaging.', points: 25 },
-  { title: 'Repair or reuse', description: 'Repair, donate, or repurpose one useful item.', points: 40 },
-  { title: 'Plan a low-waste meal', description: 'Use ingredients already at home before buying more.', points: 30 },
-  { title: 'Return a drink container', description: 'Use an official Return Right point for an eligible container.', points: 25 },
+  { title: 'Build with recyclables', description: 'Show yourself making a useful product from recyclable materials.', points: 45, kind: 'photo' as const },
+  { title: 'Return a BCRS bottle', description: 'Show at least one eligible beverage container being returned through BCRS.', points: 35, kind: 'photo' as const },
+  { title: 'Choose a green purchase', description: 'Show a receipt from a verified green event, product, or business.', points: 30, kind: 'photo' as const },
+  { title: 'Sustainability lesson', description: 'Watch today’s short sustainability lesson and complete its knowledge check.', points: 25, kind: 'video-quiz' as const, lesson: { title: 'Why clean recycling matters', summary: 'Food and liquid residue can contaminate an otherwise recyclable load. Empty, rinse and dry containers before placing them in the blue bin.', question: 'What should you do before recycling a used drink container?', options: ['Empty, rinse and dry it', 'Leave liquid inside', 'Put it in a plastic bag'] } },
+  { title: 'Bring a reusable', description: 'Show yourself using a reusable bag, container, cup, or bottle.', points: 30, kind: 'photo' as const },
+  { title: 'Sort clean recyclables', description: 'Show a clean and correctly sorted recycling load before disposal.', points: 35, kind: 'photo' as const },
 ];
 
 const accessoryQuestTemplates: Record<AccessoryId, Array<{ title: string; description: string; points: number }>> = {
@@ -251,15 +302,7 @@ const accessoryNames: Record<AccessoryId, string> = {
 };
 
 const verifiedLocations = [
-  { id: 'pick-360b-admiralty', kind: 'pick-locker', name: 'Pick Locker @ 360B Admiralty Drive', address: '360B Admiralty Drive, Singapore 752360', latitude: 1.4486, longitude: 103.8154, hours: '24 hours', sourceUrl: 'https://www.nhghealth.com.sg/wh/for-patients-visitors/your-medication/pharmacy-locker-locations' },
-  { id: 'pick-kallang-mrt', kind: 'pick-locker', name: 'Pick Locker @ Kallang MRT Station', address: '5 Sims Avenue, Singapore 387405', latitude: 1.3114, longitude: 103.8714, hours: '24 hours', sourceUrl: 'https://www.nhghealth.com.sg/wh/for-patients-visitors/your-medication/pharmacy-locker-locations' },
-  { id: 'pick-dakota-mrt', kind: 'pick-locker', name: 'Pick Locker @ Dakota MRT Station', address: '211 Old Airport Road, Singapore 397973', latitude: 1.3083, longitude: 103.8886, hours: '24 hours', sourceUrl: 'https://www.nhghealth.com.sg/wh/for-patients-visitors/your-medication/pharmacy-locker-locations' },
-  { id: 'pop-general-post-office', kind: 'singpost-locker', name: 'POPStation @ General Post Office', address: '10 Eunos Road 8, Singapore 408600', latitude: 1.3196, longitude: 103.8935, hours: '24 hours', sourceUrl: 'https://www.singpost.com/locate-us/popstation' },
-  { id: 'pop-toa-payoh', kind: 'singpost-locker', name: 'POPStation @ Toa Payoh Central Post Office', address: '520 Lorong 6 Toa Payoh, Singapore 310520', latitude: 1.3321, longitude: 103.8483, hours: '24 hours', sourceUrl: 'https://www.singpost.com/locate-us/popstation' },
-  { id: 'pop-ang-mo-kio', kind: 'singpost-locker', name: 'POPStation @ Ang Mo Kio Central Post Office', address: '727 Ang Mo Kio Avenue 6, Singapore 560727', latitude: 1.3726, longitude: 103.8465, hours: '24 hours', sourceUrl: 'https://www.singpost.com/locate-us/popstation' },
-  { id: 'returnright-nex', kind: 'return-right', name: 'Return Right @ FairPrice Xtra NEX', address: '23 Serangoon Central, Singapore 556083', latitude: 1.3507, longitude: 103.8723, hours: 'Mall operating hours', sourceUrl: 'https://returnright.sg/p/find-my-nearest-rvm' },
-  { id: 'returnright-cassia-42', kind: 'return-right', name: 'Return Right @ 42 Cassia Crescent', address: '42 Cassia Crescent, Singapore 390042', latitude: 1.3095, longitude: 103.8868, hours: '24 hours', sourceUrl: 'https://returnright.sg/p/find-my-nearest-rvm' },
-  { id: 'returnright-lot-one', kind: 'return-right', name: 'Return Right @ FairPrice Lot One', address: '21 Choa Chu Kang Avenue 4, Singapore 689812', latitude: 1.3851, longitude: 103.7449, hours: 'Store operating hours', sourceUrl: 'https://returnright.sg/p/find-my-nearest-rvm' },
+  ...fallbackLockerLocations,
 ] as const;
 
 const memberRewards: Partial<Record<AccessoryId, number>> = {
@@ -300,29 +343,21 @@ function previousSingaporeDate(date: string) {
 }
 
 function createDailyQuests(user: User, date: string): DailyQuest[] {
-  const seed = [...`${user.id}:${date}`].reduce((total, character) => (total * 31 + character.charCodeAt(0)) >>> 0, 7);
-  const equipped = user.equippedAccessories.length ? user.equippedAccessories : user.accessories.slice(0, 1);
-  const accessoryQuests = equipped.slice(0, 2).map((accessoryId, index) => {
-    const options = accessoryQuestTemplates[accessoryId];
-    const template = options[(seed + index) % options.length] ?? options[0]!;
-    return { id: `${date}-accessory-${index + 1}`, ...template, completed: false, sourceAccessoryId: accessoryId, sourceAccessoryName: accessoryNames[accessoryId] };
-  });
-  const generalNeeded = 3 - accessoryQuests.length;
+  const seed = [...date].reduce((total, character) => (total * 31 + character.charCodeAt(0)) >>> 0, 7);
   const generalStart = seed % questTemplates.length;
-  const generalQuests = Array.from({ length: generalNeeded }, (_, index) => ({ id: `${date}-general-${index + 1}`, ...(questTemplates[(generalStart + index * 2) % questTemplates.length] ?? questTemplates[0]!), completed: false }));
-  return [...accessoryQuests, ...generalQuests];
+  return Array.from({ length: 3 }, (_, index) => ({ id: `${date}-daily-${index + 1}`, ...(questTemplates[(generalStart + index * 2) % questTemplates.length] ?? questTemplates[0]!), completed: false }));
 }
 
-function applyDailyPlushieScan(user: User) {
+function applyDailyWristbandTap(user: User) {
   const now = new Date();
   const today = singaporeDate(now);
-  const lastDate = user.lastPlushieScanAt ? singaporeDate(user.lastPlushieScanAt) : null;
+  const lastDate = user.lastWristbandTapAt ? singaporeDate(user.lastWristbandTapAt) : null;
   if (lastDate !== today) {
     user.streak = lastDate === previousSingaporeDate(today) ? Math.max(1, user.streak + 1) : 1;
     user.questBoardDate = today;
     user.dailyQuests = createDailyQuests(user, today);
   }
-  user.lastPlushieScanAt = now.toISOString();
+  user.lastWristbandTapAt = now.toISOString();
   return { scannedToday: true, questsRefreshed: lastDate !== today };
 }
 
@@ -330,12 +365,35 @@ function findNfcTag(tagToken: string) {
   return [...nfcTags.values()].find((tag) => tag.token === tagToken && tag.status !== 'retired');
 }
 
+const WRISTBAND_MASCOTS: Record<WristbandColor, MascotType> = {
+  'snowy-white': 'polar-bear',
+  'charcoal-black': 'penguin',
+  'sunset-orange': 'fox',
+  'tropical-green': 'turtle',
+  'ocean-blue': 'bird',
+};
+
+function fingerprintPhoto(photoDataUrl: string) {
+  const base64 = photoDataUrl.slice(photoDataUrl.indexOf(',') + 1).replace(/\s+/g, '');
+  return createHash('sha256').update(base64).digest('hex');
+}
+
+function embeddingSimilarity(left: number[] | null, right: number[] | null) {
+  if (!left?.length || !right?.length || left.length !== right.length) return 0;
+  let dot = 0; let leftNorm = 0; let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index] ?? 0; const b = right[index] ?? 0;
+    dot += a * b; leftNorm += a * a; rightNorm += b * b;
+  }
+  return leftNorm && rightNorm ? dot / Math.sqrt(leftNorm * rightNorm) : 0;
+}
+
 function findAccessoryQrTag(tagToken: string) {
   return [...accessoryQrTags.values()].find((tag) => tag.token === tagToken && tag.status !== 'retired');
 }
 
 async function analyzeSubmission(photoDataUrl: string, description: string) {
-  if (!process.env.YOLO_SERVICE_URL) return { confidence: null as number | null, label: null as string | null, accepted: false };
+  if (!process.env.YOLO_SERVICE_URL) return { confidence: null as number | null, label: null as string | null, embedding: null as number[] | null, accepted: false };
   try {
     const response = await fetch(process.env.YOLO_SERVICE_URL, {
       method: 'POST',
@@ -343,12 +401,13 @@ async function analyzeSubmission(photoDataUrl: string, description: string) {
       body: JSON.stringify({ image: photoDataUrl, description }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return { confidence: null, label: null, accepted: false };
-    const result = await response.json() as { confidence?: number; label?: string; accepted?: boolean };
+    if (!response.ok) return { confidence: null, label: null, embedding: null, accepted: false };
+    const result = await response.json() as { confidence?: number; label?: string; embedding?: number[]; accepted?: boolean };
     const confidence = typeof result.confidence === 'number' ? Math.max(0, Math.min(1, result.confidence)) : null;
-    return { confidence, label: result.label?.slice(0, 100) ?? null, accepted: result.accepted === true && confidence !== null && confidence >= 0.8 };
+    const embedding = Array.isArray(result.embedding) && result.embedding.length <= 4096 && result.embedding.every(Number.isFinite) ? result.embedding : null;
+    return { confidence, label: result.label?.slice(0, 100) ?? null, embedding, accepted: result.accepted === true && confidence !== null && confidence >= 0.8 };
   } catch {
-    return { confidence: null, label: null, accepted: false };
+    return { confidence: null, label: null, embedding: null, accepted: false };
   }
 }
 
@@ -375,7 +434,12 @@ function sessionFromRequest(request: Request) {
   const authorization = request.header('authorization');
   const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
   const session = token ? webSessions.get(token) : undefined;
-  if (!session || session.expiresAt <= Date.now()) return null;
+  if (!session) return null;
+  const account = portalAccounts.get(session.accountId);
+  if (session.expiresAt <= Date.now() || !account || account.status !== 'active' || account.role !== session.role) {
+    webSessions.delete(session.token);
+    return null;
+  }
   return session;
 }
 
@@ -386,8 +450,13 @@ function memberFromRequest(request: Request) {
   const authorization = request.header('authorization');
   const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
   const mobileSession = token ? mobileSessions.get(token) : undefined;
-  if (!mobileSession || mobileSession.expiresAt <= Date.now()) return null;
-  return findUser(mobileSession.userId) ?? null;
+  if (!mobileSession) return null;
+  const user = findUser(mobileSession.userId);
+  if (mobileSession.expiresAt <= Date.now() || !user) {
+    mobileSessions.delete(mobileSession.token);
+    return null;
+  }
+  return user;
 }
 
 function getPortalRole(request: Request): PortalRole | null {
@@ -446,18 +515,20 @@ app.post('/api/auth/email-status', (request, response, next) => {
   }
 });
 
-app.post('/api/auth/sign-in', (request, response, next) => {
+app.post('/api/auth/sign-in', async (request, response, next) => {
   try {
     const { email } = signInSchema.parse(request.body);
     const existing = users.get(email.toLowerCase());
     if (!existing) return response.json({ isNewUser: true, draft: { name: '', email: email.toLowerCase() } });
-    response.json({ isNewUser: false, token: createMobileSession(existing.id), user: existing });
+    const token = createMobileSession(existing.id);
+    await persistDatabase(persistedCollections);
+    response.json({ isNewUser: false, token, user: existing });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/auth/web-sign-in', (request, response, next) => {
+app.post('/api/auth/web-sign-in', async (request, response, next) => {
   try {
     const { email } = signInSchema.parse(request.body);
     const normalizedEmail = email.toLowerCase();
@@ -470,24 +541,45 @@ app.post('/api/auth/web-sign-in', (request, response, next) => {
     const session = createWebSession(account);
     const privileged = account.role !== 'member';
     const handoffToken = !privileged && user ? createMobileHandoff(user.id) : undefined;
+    await persistDatabase(persistedCollections);
     response.json({ token: session.token, account, role: account.role, destination: privileged ? 'operations' : 'member-web', handoffToken, member: privileged ? undefined : user });
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/api/auth/session', (request, response) => {
-  const session = sessionFromRequest(request);
-  if (!session) return response.status(401).json({ message: 'Session expired.' });
-  const account = portalAccounts.get(session.accountId);
-  if (!account) return response.status(404).json({ message: 'Account not found.' });
-  const privileged = account.role !== 'member';
-  const user = findUser(account.id);
-  const handoffToken = !privileged && user ? createMobileHandoff(user.id) : undefined;
-  response.json({ account, role: account.role, destination: privileged ? 'operations' : 'member-web', handoffToken, member: privileged ? undefined : user });
+app.post('/api/auth/sign-out', async (request, response, next) => {
+  try {
+    const authorization = request.header('authorization');
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
+    if (token) {
+      webSessions.delete(token);
+      mobileSessions.delete(token);
+    }
+    await persistDatabase(persistedCollections);
+    response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.post('/api/auth/mobile-handoff/exchange', (request, response, next) => {
+app.get('/api/auth/session', async (request, response, next) => {
+  try {
+    const session = sessionFromRequest(request);
+    if (!session) return response.status(401).json({ message: 'Session expired.' });
+    const account = portalAccounts.get(session.accountId);
+    if (!account) return response.status(404).json({ message: 'Account not found.' });
+    const privileged = account.role !== 'member';
+    const user = findUser(account.id);
+    const handoffToken = !privileged && user ? createMobileHandoff(user.id) : undefined;
+    if (handoffToken) await persistDatabase(persistedCollections);
+    response.json({ account, role: account.role, destination: privileged ? 'operations' : 'member-web', handoffToken, member: privileged ? undefined : user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/mobile-handoff/exchange', async (request, response, next) => {
   try {
     const { handoffToken } = handoffExchangeSchema.parse(request.body);
     const handoff = mobileHandoffs.get(handoffToken);
@@ -495,7 +587,9 @@ app.post('/api/auth/mobile-handoff/exchange', (request, response, next) => {
     const user = findUser(handoff.userId);
     if (!user) return response.status(404).json({ message: 'Account not found.' });
     handoff.consumed = true;
-    response.json({ isNewUser: false, token: createMobileSession(user.id), user });
+    const token = createMobileSession(user.id);
+    await persistDatabase(persistedCollections);
+    response.json({ isNewUser: false, token, user });
   } catch (error) {
     next(error);
   }
@@ -512,37 +606,43 @@ app.post('/api/auth/google', async (request, response, next) => {
     const email = profile.email.toLowerCase();
     const user = users.get(email);
     if (!user) return response.json({ isNewUser: true, draft: { name: profile.name ?? '', email } });
-    response.json({ isNewUser: false, token: createMobileSession(user.id), user });
+    const token = createMobileSession(user.id);
+    await persistDatabase(persistedCollections);
+    response.json({ isNewUser: false, token, user });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/auth/onboarding', (request, response, next) => {
+app.post('/api/auth/onboarding', async (request, response, next) => {
   try {
     const input = onboardingSchema.parse(request.body);
     const user: User = {
       id: crypto.randomUUID(),
       name: input.name,
       email: input.email.toLowerCase(),
-      plushieName: input.plushieName,
-      plushieType: 'Natural calico bear',
-      plushiePaired: false,
+      mascotName: input.mascotName,
+      mascotType: 'polar-bear',
+      wristbandColor: 'snowy-white',
+      wristbandPaired: false,
+      wristbandPickupLocation: null,
       accessories: ['bright-star'],
-      pendingAccessories: [],
       equippedAccessories: ['bright-star'],
       friendIds: [],
       notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
       streak: 0,
       points: 0,
       lifetimePoints: 0,
-      lastPlushieScanAt: null,
+      lastWristbandTapAt: null,
       questBoardDate: null,
       dailyQuests: [],
+      coupons: [],
     };
     users.set(user.email, user);
     portalAccounts.set(user.id, { id: user.id, name: user.name, email: user.email, role: 'member', status: 'active' });
-    response.status(201).json({ isNewUser: false, token: createMobileSession(user.id), user });
+    const token = createMobileSession(user.id);
+    await persistDatabase(persistedCollections);
+    response.status(201).json({ isNewUser: false, token, user });
   } catch (error) {
     next(error);
   }
@@ -565,20 +665,20 @@ app.get('/api/member/daily-status', (request, response) => {
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
   const today = singaporeDate();
   response.json({
-    needsPlushieScan: !user.lastPlushieScanAt || singaporeDate(user.lastPlushieScanAt) !== today,
+    needsWristbandTap: !user.lastWristbandTapAt || singaporeDate(user.lastWristbandTapAt) !== today,
     questBoardDate: user.questBoardDate,
     quests: user.dailyQuests,
   });
 });
 
-app.post('/api/member/plushie/pair', (request, response, next) => {
+app.post('/api/member/wristband/pair', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-    const { tagToken } = pairSchema.parse(request.body);
+    const { tagToken, pickupLocation } = pairSchema.parse(request.body);
     const tag = findNfcTag(tagToken);
     if (!tag) return response.status(404).json({ message: 'This novo tag has not been prepared by staff.' });
-    if (tag.pairedUserId && tag.pairedUserId !== user.id) return response.status(409).json({ message: 'This plushie is already paired to another account.' });
+    if (tag.pairedUserId && tag.pairedUserId !== user.id) return response.status(409).json({ message: 'This wristband is already paired to another account.' });
     for (const existingTag of nfcTags.values()) {
       if (existingTag.pairedUserId === user.id && existingTag.id !== tag.id) {
         existingTag.pairedUserId = null;
@@ -589,21 +689,24 @@ app.post('/api/member/plushie/pair', (request, response, next) => {
     tag.pairedUserId = user.id;
     tag.pairedAt = new Date().toISOString();
     tag.status = 'paired';
-    user.plushiePaired = true;
+    user.wristbandPaired = true;
+    user.wristbandColor = tag.wristbandColor;
+    user.mascotType = tag.mascotType;
+    user.wristbandPickupLocation = pickupLocation ?? user.wristbandPickupLocation;
     response.json({ user, daily: { scannedToday: false, questsRefreshed: false } });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/member/plushie/interact', (request, response, next) => {
+app.post('/api/member/wristband/interact', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
     const { tagToken } = pairSchema.parse(request.body);
     const tag = findNfcTag(tagToken);
-    if (!tag || tag.pairedUserId !== user.id || tag.status !== 'paired') return response.status(403).json({ message: 'Tap the plushie paired to this account.' });
-    const daily = applyDailyPlushieScan(user);
+    if (!tag || tag.pairedUserId !== user.id || tag.status !== 'paired') return response.status(403).json({ message: 'Tap the wristband paired to this account.' });
+    const daily = applyDailyWristbandTap(user);
     response.json({ user, daily });
   } catch (error) {
     next(error);
@@ -614,25 +717,8 @@ app.post('/api/member/accessories/redeem', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-    const { code } = redeemSchema.parse(request.body);
-    const trimmed = code.trim();
-    const qrToken = trimmed.match(/^novo:\/\/accessory\/([^/?#]+)/i)?.[1];
-    const qrTag = qrToken ? findAccessoryQrTag(decodeURIComponent(qrToken)) : undefined;
-    const accessoryId = qrTag?.accessoryId ?? accessoryCodes[trimmed.toUpperCase()];
-    if (!accessoryId) return response.status(404).json({ message: 'This accessory QR code is not recognised.' });
-    if (qrTag?.pairedUserId && qrTag.pairedUserId !== user.id) return response.status(409).json({ message: 'This physical accessory is already paired to another account.' });
-    if (!user.pendingAccessories.includes(accessoryId) && !user.accessories.includes(accessoryId)) return response.status(403).json({ message: 'This accessory is not waiting in your wardrobe. Order it first, then scan its physical QR tag.' });
-    if (qrTag) {
-      qrTag.pairedUserId = user.id;
-      qrTag.pairedAt = new Date().toISOString();
-      qrTag.status = 'paired';
-    }
-    user.accessories = Array.from(new Set([...user.accessories, accessoryId]));
-    user.pendingAccessories = user.pendingAccessories.filter((id) => id !== accessoryId);
-    user.equippedAccessories = Array.from(new Set([...user.equippedAccessories, accessoryId]));
-    const matchingOrder = qrTag?.orderId ? fulfillmentOrders.get(qrTag.orderId) : [...fulfillmentOrders.values()].find((order) => order.userId === user.id && order.accessoryId === accessoryId && order.status !== 'delivered' && order.status !== 'cancelled');
-    if (matchingOrder) matchingOrder.status = 'delivered';
-    response.json({ user, accessoryId });
+    redeemSchema.parse(request.body);
+    response.status(410).json({ message: 'Physical accessory QR pairing has retired. Accessories now unlock instantly in the marketplace.' });
   } catch (error) {
     next(error);
   }
@@ -643,7 +729,7 @@ app.post('/api/member/accessories/equip', (request, response, next) => {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
     const { accessoryId } = memberAccessorySchema.parse(request.body);
-    if (!user.accessories.includes(accessoryId)) return response.status(403).json({ message: 'Pair this accessory in the app before equipping it.' });
+    if (!user.accessories.includes(accessoryId)) return response.status(403).json({ message: 'Unlock this digital accessory in the marketplace before equipping it.' });
     user.equippedAccessories = user.equippedAccessories.includes(accessoryId)
       ? user.equippedAccessories.filter((id) => id !== accessoryId)
       : [...user.equippedAccessories, accessoryId];
@@ -653,10 +739,10 @@ app.post('/api/member/accessories/equip', (request, response, next) => {
   }
 });
 
-app.post('/api/member/plushie/unpair', (request, response) => {
+app.post('/api/member/wristband/unpair', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  user.plushiePaired = false;
+  user.wristbandPaired = false;
   for (const tag of nfcTags.values()) {
     if (tag.pairedUserId === user.id) {
       tag.pairedUserId = null;
@@ -692,7 +778,7 @@ app.get('/api/member/tasks', (request, response) => {
       latitude: event.latitude,
       longitude: event.longitude,
     }));
-  response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
+  response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(memberSubmission) });
 });
 
 app.post('/api/member/events/:eventId/signup', (request, response) => {
@@ -710,7 +796,10 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
     const input = customTaskSchema.parse(request.body);
+    const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
+    if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
     const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? 50 : null;
     const submission: Submission = {
       id: `sub_${crypto.randomUUID()}`,
@@ -724,13 +813,15 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
       aiLabel: analysis.label,
       createdAt: new Date().toISOString(),
       rewardApplied: Boolean(awardedPoints),
+      photoFingerprint,
+      photoEmbedding: analysis.embedding,
     };
     if (awardedPoints) {
       user.points += awardedPoints;
       user.lifetimePoints += awardedPoints;
     }
     submissions.set(submission.id, submission);
-    response.status(201).json({ submission, user, automated: analysis.accepted });
+    response.status(201).json({ submission: memberSubmission(submission), user, automated: analysis.accepted });
   } catch (error) {
     next(error);
   }
@@ -745,16 +836,39 @@ app.post('/api/member/tasks/:questId/submit', async (request, response, next) =>
     if (quest.completed) return response.status(409).json({ message: 'This task has already been completed today.' });
     if ([...submissions.values()].some((item) => item.userId === user.id && item.questId === quest.id && item.status === 'pending')) return response.status(409).json({ message: 'This task is already waiting for staff review.' });
     const input = customTaskSchema.omit({ title: true }).parse(request.body);
+    const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
+    if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
     const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? quest.points : null;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
     if (awardedPoints) {
       user.points += awardedPoints;
       user.lifetimePoints += awardedPoints;
       quest.completed = true;
     }
     submissions.set(submission.id, submission);
-    response.status(201).json({ submission, user, automated: analysis.accepted });
+    response.status(201).json({ submission: memberSubmission(submission), user, automated: analysis.accepted });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/member/tasks/:questId/quiz', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    const quest = user.dailyQuests.find((item) => item.id === routeParam(request.params.questId));
+    if (!quest || quest.kind !== 'video-quiz' || !quest.lesson) return response.status(404).json({ message: 'This knowledge check is not on today’s quest board.' });
+    if (quest.completed) return response.status(409).json({ message: 'This lesson has already been completed today.' });
+    const { answer } = quizSubmissionSchema.parse(request.body);
+    if (answer !== quest.lesson.options[0]) return response.status(422).json({ message: 'Not quite. Rewatch the lesson and try the knowledge check again.' });
+    quest.completed = true;
+    user.points += quest.points;
+    user.lifetimePoints += quest.points;
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
+    submissions.set(submission.id, submission);
+    response.status(201).json({ submission: memberSubmission(submission), user, automated: true });
   } catch (error) {
     next(error);
   }
@@ -766,14 +880,14 @@ app.get('/api/member/leaderboard', (request, response) => {
   const leaders = [...users.values()]
     .sort((left, right) => right.lifetimePoints - left.lifetimePoints || left.name.localeCompare(right.name))
     .slice(0, 50)
-    .map((member, index) => ({ rank: index + 1, id: member.id, name: member.name, plushieName: member.plushieName, lifetimePoints: member.lifetimePoints, accessories: member.equippedAccessories, isCurrentUser: member.id === user.id }));
+    .map((member, index) => ({ rank: index + 1, id: member.id, name: member.name, mascotName: member.mascotName, mascotType: member.mascotType, lifetimePoints: member.lifetimePoints, accessories: member.equippedAccessories, isCurrentUser: member.id === user.id }));
   response.json({ leaders });
 });
 
 app.get('/api/member/friends', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  const friends = user.friendIds.map(findUser).filter((friend): friend is User => Boolean(friend)).map((friend) => ({ id: friend.id, name: friend.name, plushieName: friend.plushieName, lifetimePoints: friend.lifetimePoints, accessories: friend.equippedAccessories }));
+  const friends = user.friendIds.map(findUser).filter((friend): friend is User => Boolean(friend)).map((friend) => ({ id: friend.id, name: friend.name, mascotName: friend.mascotName, mascotType: friend.mascotType, lifetimePoints: friend.lifetimePoints, accessories: friend.equippedAccessories }));
   response.json({ friends });
 });
 
@@ -798,14 +912,30 @@ app.patch('/api/member/notifications', (request, response, next) => {
   }
 });
 
-app.get('/api/locations', (_request, response) => {
-  response.json({ locations: verifiedLocations, verifiedAt: '2026-09-21', liveReturnRightUrl: 'https://returnright.sg/p/find-my-nearest-rvm' });
+app.get('/api/locations', async (request, response, next) => {
+  try {
+    const directory = await getReturnRightDirectory({ offline: process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE === '1' });
+    const allLocations = [...verifiedLocations, ...directory.locations];
+    const kind = typeof request.query.kind === 'string' ? request.query.kind : '';
+    const locations = kind ? allLocations.filter((location) => location.kind === kind) : allLocations;
+    response.json({ locations, total: locations.length, returnRightTotal: directory.locations.length, updatedAt: directory.updatedAt, source: directory.source, liveReturnRightUrl: 'https://returnright.sg/p/find-my-nearest-rvm' });
+  } catch (error) {
+    next(error);
+  }
 });
 
-app.get('/api/member/market/lockers', (request, response) => {
+app.get('/api/member/wristband/pickup-locations', async (request, response, next) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  response.json({ lockers: verifiedLocations.filter((location) => location.kind === 'pick-locker' || location.kind === 'singpost-locker') });
+  try {
+    const directory = await getLockerDirectory({ offline: process.env.NOVO_LOCKER_DIRECTORY_OFFLINE === '1' });
+    const query = typeof request.query.q === 'string' ? request.query.q : '';
+    const provider = typeof request.query.provider === 'string' ? request.query.provider.toLowerCase() : undefined;
+    const lockers = searchLockerDirectory(directory.lockers, query, provider);
+    response.json({ lockers, total: lockers.length, directoryTotal: directory.lockers.length, sourceCounts: directory.sourceCounts, updatedAt: directory.updatedAt });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.delete('/api/member/account', (request, response) => {
@@ -822,16 +952,15 @@ app.post('/api/member/market/purchase', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-    const { accessoryId, lockerLocation } = memberPurchaseSchema.parse(request.body);
+    const { accessoryId } = memberPurchaseSchema.parse(request.body);
     const price = memberRewards[accessoryId];
     if (!price) return response.status(404).json({ message: 'This reward is not currently available.' });
-    if (user.accessories.includes(accessoryId) || user.pendingAccessories.includes(accessoryId)) return response.status(409).json({ message: 'This reward is already in your wardrobe.' });
+    if (user.accessories.includes(accessoryId)) return response.status(409).json({ message: 'This reward is already in your wardrobe.' });
     if (user.points < price) return response.status(409).json({ message: 'You need more leaves for this reward.' });
     user.points -= price;
-    user.pendingAccessories.push(accessoryId);
-    const order: FulfillmentOrder = { id: `ord_${crypto.randomUUID()}`, userId: user.id, accessoryId, lockerLocation, points: price, status: 'confirmed', createdAt: new Date().toISOString() };
-    fulfillmentOrders.set(order.id, order);
-    response.json({ user, price, order });
+    user.accessories.push(accessoryId);
+    user.equippedAccessories = Array.from(new Set([...user.equippedAccessories, accessoryId]));
+    response.json({ user, price, unlocked: accessoryId });
   } catch (error) {
     next(error);
   }
@@ -847,6 +976,22 @@ app.post('/api/member/charity/contribute', (request, response, next) => {
     const contribution: Donation = { id: `don_${crypto.randomUUID()}`, userId: user.id, causeId, causeName, points, createdAt: new Date().toISOString() };
     donations.set(contribution.id, contribution);
     response.json({ user, contribution });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/member/market/coupon/redeem', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    const { offerId, name, points } = couponSchema.parse(request.body);
+    if (user.coupons.some((coupon) => coupon.offerId === offerId)) return response.status(409).json({ message: 'This coupon is already in your rewards wallet.' });
+    if (user.points < points) return response.status(409).json({ message: 'You need more leaves to redeem this coupon.' });
+    user.points -= points;
+    const coupon: RedeemedCoupon = { id: `coupon_${crypto.randomUUID()}`, offerId, name, code: `NOVO-${randomBytes(4).toString('hex').toUpperCase()}`, redeemedAt: new Date().toISOString() };
+    user.coupons.push(coupon);
+    response.json({ user, coupon });
   } catch (error) {
     next(error);
   }
@@ -873,6 +1018,7 @@ app.post('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'),
       latitude: input.latitude ?? inferredCoordinates.latitude,
       longitude: input.longitude ?? inferredCoordinates.longitude,
       attendees: [],
+      checkedInUserIds: [],
     };
     portalEvents.set(event.id, event);
     response.status(201).json({ event });
@@ -900,12 +1046,19 @@ app.delete('/api/portal/events/:eventId', requirePortalRole('organizer', 'staff'
 
 app.post('/api/portal/events/:eventId/check-in', requirePortalRole('organizer', 'admin'), (request, response, next) => {
   try {
-    const { attendeeId } = checkInSchema.parse(request.body);
+    const { tagToken } = checkInSchema.parse(request.body);
+    const tag = findNfcTag(tagToken);
+    if (!tag || tag.status !== 'paired' || !tag.pairedUserId) return response.status(404).json({ message: 'This is not an active paired Novo wristband.' });
+    const attendeeId = tag.pairedUserId;
     const event = portalEvents.get(routeParam(request.params.eventId));
     if (!event) return response.status(404).json({ message: 'Event not found.' });
-    if (event.capacity !== null && event.attendees.length >= event.capacity && !event.attendees.includes(attendeeId)) return response.status(409).json({ message: 'This event has reached capacity.' });
+    if (!event.attendees.includes(attendeeId)) return response.status(403).json({ message: 'This wristband owner is not registered for this event.' });
+    if (event.checkedInUserIds.includes(attendeeId)) return response.status(409).json({ message: 'This wristband has already completed attendance for this event.' });
     event.attendees = Array.from(new Set([...event.attendees, attendeeId]));
-    response.json({ event, pointsQueued: event.points });
+    event.checkedInUserIds.push(attendeeId);
+    const member = findUser(attendeeId);
+    if (member) { member.points += event.points; member.lifetimePoints += event.points; }
+    response.json({ event, attendee: member ? { id: member.id, name: member.name, mascotName: member.mascotName } : { id: attendeeId }, pointsAwarded: event.points });
   } catch (error) {
     next(error);
   }
@@ -953,12 +1106,14 @@ app.get('/api/portal/nfc-tags', requirePortalRole('staff', 'admin'), (_request, 
 
 app.post('/api/portal/nfc-tags', requirePortalRole('staff', 'admin'), (request, response, next) => {
   try {
-    const { label } = provisionTagSchema.parse(request.body);
+    const { label, wristbandColor } = provisionTagSchema.parse(request.body);
     const session = sessionFromRequest(request);
     const tag: NfcTag = {
       id: `nfc_${crypto.randomUUID()}`,
       token: randomBytes(32).toString('base64url'),
       label,
+      wristbandColor,
+      mascotType: WRISTBAND_MASCOTS[wristbandColor],
       createdBy: session?.accountId ?? `development-${response.locals.portalRole}`,
       createdAt: new Date().toISOString(),
       pairedUserId: null,
@@ -966,7 +1121,7 @@ app.post('/api/portal/nfc-tags', requirePortalRole('staff', 'admin'), (request, 
       status: 'ready',
     };
     nfcTags.set(tag.id, tag);
-    response.status(201).json({ tag, ndefUrl: `novo://plushie/${tag.token}` });
+    response.status(201).json({ tag, ndefUrl: `novo://wristband/${tag.token}` });
   } catch (error) {
     next(error);
   }
@@ -978,7 +1133,7 @@ app.patch('/api/portal/nfc-tags/:tagId/retire', requirePortalRole('staff', 'admi
   tag.status = 'retired';
   if (tag.pairedUserId) {
     const user = findUser(tag.pairedUserId);
-    if (user) user.plushiePaired = false;
+    if (user) user.wristbandPaired = false;
   }
   tag.pairedUserId = null;
   tag.pairedAt = null;
@@ -989,8 +1144,9 @@ app.patch('/api/portal/nfc-tags/:tagId', requirePortalRole('staff', 'admin'), (r
   try {
     const tag = nfcTags.get(routeParam(request.params.tagId));
     if (!tag) return response.status(404).json({ message: 'NFC tag not found.' });
-    const changes = z.object({ label: z.string().trim().min(2).max(80) }).parse(request.body);
+    const changes = z.object({ label: z.string().trim().min(2).max(80), wristbandColor: wristbandColorSchema.optional() }).parse(request.body);
     tag.label = changes.label;
+    if (changes.wristbandColor) { tag.wristbandColor = changes.wristbandColor; tag.mascotType = WRISTBAND_MASCOTS[changes.wristbandColor]; }
     response.json({ tag });
   } catch (error) { next(error); }
 });
@@ -998,7 +1154,7 @@ app.patch('/api/portal/nfc-tags/:tagId', requirePortalRole('staff', 'admin'), (r
 app.delete('/api/portal/nfc-tags/:tagId', requirePortalRole('staff', 'admin'), (request, response) => {
   const tag = nfcTags.get(routeParam(request.params.tagId));
   if (!tag) return response.status(404).json({ message: 'NFC tag not found.' });
-  if (tag.status === 'paired') return response.status(409).json({ message: 'Retire a paired plushie tag before deleting it.' });
+  if (tag.status === 'paired') return response.status(409).json({ message: 'Retire a paired wristband tag before deleting it.' });
   nfcTags.delete(tag.id);
   response.status(204).send();
 });
@@ -1106,20 +1262,22 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
         id: account.id,
         name: account.name,
         email: account.email,
-        plushieName: '',
-        plushieType: '',
-        plushiePaired: false,
+        mascotName: 'Nova',
+        mascotType: 'polar-bear',
+        wristbandColor: 'snowy-white',
+        wristbandPaired: false,
+        wristbandPickupLocation: null,
         accessories: [],
-        pendingAccessories: [],
         equippedAccessories: [],
         friendIds: [],
         notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
         streak: 0,
         points: 0,
         lifetimePoints: 0,
-        lastPlushieScanAt: null,
+        lastWristbandTapAt: null,
         questBoardDate: null,
         dailyQuests: [],
+        coupons: [],
       });
     }
     response.status(201).json({ account });

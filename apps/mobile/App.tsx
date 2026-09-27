@@ -1,34 +1,37 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
+  ApiError,
   addFriend,
   contributePoints,
   deleteMemberAccount,
   equipAccessory,
   exchangeMobileHandoff,
   getMemberProfile,
-  interactWithPlushie,
-  pairPlushie,
+  interactWithWristband,
+  pairWristband,
   purchaseAccessory,
-  redeemAccessory,
+  redeemCoupon,
+  getWristbandPickupLocations,
+  revokeSession,
   restoreMobileSession,
   updateNotificationPreferences,
-  unpairPlushie,
+  unpairWristband,
 } from './src/api';
 import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
-import { AccessoryScanScreen } from './src/screens/AccessoryScanScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
-import { PairPlushieScreen } from './src/screens/PairPlushieScreen';
+import { PairWristbandScreen } from './src/screens/PairWristbandScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
 import { AccessoryId, AuthResult, Screen, User } from './src/types';
 import { colors } from './src/theme';
 
 const SESSION_KEY = 'novo-mobile-session';
+const LAST_PROFILE_KEY = 'novo-last-profile';
 const profileKey = (email: string) => `novo-profile:${email.toLowerCase()}`;
 
 export default function App() {
@@ -73,13 +76,14 @@ export default function App() {
 
   const saveUser = async (nextUser: User) => {
     setUser(nextUser);
-    await AsyncStorage.setItem(profileKey(nextUser.email), JSON.stringify(nextUser));
+    const serialized = JSON.stringify(nextUser);
+    await AsyncStorage.multiSet([[profileKey(nextUser.email), serialized], [LAST_PROFILE_KEY, serialized]]);
   };
 
   const routeUser = async (nextUser: User) => {
     await saveUser(nextUser);
     void syncNotificationSchedule(nextUser.notificationPreferences).catch(() => undefined);
-    setScreen(nextUser.plushiePaired ? 'home' : 'pair-plushie');
+    setScreen(nextUser.wristbandPaired ? 'home' : 'pair-wristband');
   };
 
   const rememberSession = async (token: string) => {
@@ -87,9 +91,12 @@ export default function App() {
     await AsyncStorage.setItem(SESSION_KEY, token);
   };
 
-  const clearSession = async () => {
+  const clearSession = async (revokeOnServer = true) => {
+    const token = tokenRef.current ?? await AsyncStorage.getItem(SESSION_KEY);
+    if (revokeOnServer && token) await revokeSession(token).catch(() => undefined);
+    const activeUser = user;
     tokenRef.current = null;
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await AsyncStorage.multiRemove([SESSION_KEY, LAST_PROFILE_KEY, ...(activeUser ? [profileKey(activeUser.email)] : [])]);
     setUser(null);
     setDraft(undefined);
     setScreen('signin');
@@ -144,13 +151,25 @@ export default function App() {
 
         const storedToken = await AsyncStorage.getItem(SESSION_KEY);
         if (!storedToken) return;
-        const result = await restoreMobileSession(storedToken);
-        if (!result.user) throw new Error('Profile missing from session.');
-        await rememberSession(storedToken);
-        await routeUser(result.user);
-        await acceptPendingFriend();
+        try {
+          const result = await restoreMobileSession(storedToken);
+          if (!result.user) throw new Error('Profile missing from session.');
+          await rememberSession(storedToken);
+          await routeUser(result.user);
+          await acceptPendingFriend();
+        } catch (error) {
+          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+            await clearSession(false);
+            return;
+          }
+          const cachedProfile = await AsyncStorage.getItem(LAST_PROFILE_KEY);
+          if (!cachedProfile) throw error;
+          const cachedUser = JSON.parse(cachedProfile) as User;
+          await rememberSession(storedToken);
+          await routeUser(cachedUser);
+        }
       } catch {
-        await clearSession();
+        await clearSession(false);
       } finally {
         if (mounted) setBooting(false);
       }
@@ -197,22 +216,17 @@ export default function App() {
 
   const handleProfileCreated = (result: AuthResult) => handleAuth(result);
 
-  const handlePairRequest = async (tagToken: string) => pairPlushie(requireToken(), tagToken);
+  const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
+  const handleLoadWristbandPickupLocations = useCallback(() => getWristbandPickupLocations(requireToken()), []);
 
-  const handlePlushieInteraction = async (tagToken: string) => {
-    const updated = await interactWithPlushie(requireToken(), tagToken);
+  const handleWristbandInteraction = async (tagToken: string) => {
+    const updated = await interactWithWristband(requireToken(), tagToken);
     await saveUser(updated);
     return updated;
   };
 
   const handlePaired = async (pairedUser: User) => {
     await saveUser(pairedUser);
-    setScreen('home');
-  };
-
-  const handleScanned = async (code: string) => {
-    const updated = await redeemAccessory(requireToken(), code);
-    await saveUser(updated);
     setScreen('home');
   };
 
@@ -224,11 +238,11 @@ export default function App() {
     }
   };
 
-  const handlePurchase = async (accessoryId: AccessoryId, _cost: number, lockerLocation: string) => {
+  const handlePurchase = async (accessoryId: AccessoryId, _cost: number) => {
     try {
-      const updated = await purchaseAccessory(requireToken(), accessoryId, lockerLocation);
+      const updated = await purchaseAccessory(requireToken(), accessoryId);
       await saveUser(updated);
-      if (updated.notificationPreferences.orders) void sendLocalNotification('Accessory ordered', 'It is waiting in your wardrobe. Scan its physical QR code after pickup to enable it.', 'home');
+      if (updated.notificationPreferences.orders) void sendLocalNotification('Accessory unlocked', 'Your new in-app accessory is ready in the wardrobe.', 'home');
     } catch (error) {
       showMutationError(error);
       throw error;
@@ -250,9 +264,18 @@ export default function App() {
     }
   };
 
+  const handleRedeemCoupon = async (points: number, offerId: string, name: string) => {
+    try {
+      await saveUser(await redeemCoupon(requireToken(), points, offerId, name));
+    } catch (error) {
+      showMutationError(error);
+      throw error;
+    }
+  };
+
   const handleUnpair = async () => {
     try {
-      await routeUser(await unpairPlushie(requireToken()));
+      await routeUser(await unpairWristband(requireToken()));
     } catch (error) {
       showMutationError(error);
     }
@@ -262,7 +285,7 @@ export default function App() {
     if (!user) return;
     try {
       await deleteMemberAccount(requireToken());
-      await AsyncStorage.multiRemove([SESSION_KEY, profileKey(user.email)]);
+      await AsyncStorage.multiRemove([SESSION_KEY, LAST_PROFILE_KEY, profileKey(user.email)]);
       tokenRef.current = null;
       setUser(null);
       setScreen('signin');
@@ -280,9 +303,8 @@ export default function App() {
       <StatusBar style="dark" />
       {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
-      {screen === 'pair-plushie' && user && <PairPlushieScreen user={user} onPair={handlePairRequest} onPaired={handlePaired} onSignOut={clearSession} />}
-      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onPlushieTag={handlePlushieInteraction} onScanAccessory={() => setScreen('scan-accessory')} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
-      {screen === 'scan-accessory' && user && <AccessoryScanScreen onClose={() => setScreen('home')} onScanned={handleScanned} />}
+      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onPaired={handlePaired} onSignOut={clearSession} />}
+      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
     </SafeAreaProvider>
   );
 }

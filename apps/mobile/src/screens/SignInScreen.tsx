@@ -122,7 +122,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
             <View onLayout={captureFrame(setHeroCopyFrame)} style={[styles.heroCopy, short && styles.heroCopyShort, constrained && styles.heroCopyKeyboard]}>
               <Text style={[styles.eyebrow, short && styles.eyebrowShort]}>MEET YOUR PLANET PAL</Text>
               <Text accessibilityRole="header" style={[styles.heroTitle, short && styles.heroTitleShort, constrained && styles.heroTitleKeyboard]}>Less waste.{`\n`}More <Text style={[styles.heroAccent, short && styles.heroAccentShort, constrained && styles.heroTitleKeyboard]}>wonder.</Text></Text>
-              <Text style={[styles.heroBody, short && styles.heroBodyShort, constrained && styles.heroBodyKeyboard]}>Grow better habits with a plushie that cheers on every refill, repair and rethink.</Text>
+              <Text style={[styles.heroBody, short && styles.heroBodyShort, constrained && styles.heroBodyKeyboard]}>Grow better habits with a wristband that brings your in-app animal mascot to life.</Text>
             </View>
             {!hidePosterPlushie && <View onLayout={captureFrame(setPlushieFrame)} accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.plushieStage, wide ? styles.plushieStageWide : [short && styles.plushieStageShort, constrained && styles.plushieStageKeyboard, { transform: [{ scale: compactPlushieScale }] }]]}>
               <View style={[styles.stageCircle, wide && styles.stageCircleWide]} />

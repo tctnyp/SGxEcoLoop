@@ -6,10 +6,12 @@ process.env.NOVO_DB_PATH = ':memory:';
 process.env.NOVO_ADMIN_EMAIL = 'admin@example.com';
 process.env.NOVO_STAFF_EMAIL = 'staff@example.com';
 process.env.NOVO_ORGANIZER_EMAIL = 'organizer@example.com';
+process.env.NOVO_LOCKER_DIRECTORY_OFFLINE = '1';
+process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE = '1';
 const { app } = await import('./app.js');
 
 async function createMember(email: string, name = 'Sam') {
-  const response = await request(app).post('/api/auth/onboarding').send({ name, email, plushieName: 'Sprout', focus: 'food' });
+  const response = await request(app).post('/api/auth/onboarding').send({ name, email, mascotName: 'Sprout', focus: 'food' });
   assert.equal(response.status, 201);
   return { user: response.body.user, authorization: `Bearer ${response.body.token}` };
 }
@@ -36,31 +38,35 @@ describe('novo API', () => {
     const knownStatus = await request(app).post('/api/auth/email-status').send({ email: 'profile@example.com' });
     assert.equal(knownStatus.status, 200);
     assert.equal(knownStatus.body.exists, true);
-    assert.equal(user.plushiePaired, false);
+    assert.equal(user.wristbandPaired, false);
+    assert.equal(user.mascotType, 'polar-bear');
     assert.equal(user.points, 0);
     assert.equal(user.lifetimePoints, 0);
     assert.deepEqual(user.dailyQuests, []);
+    assert.deepEqual(user.coupons, []);
   });
 
-  it('provisions, pairs and verifies the same physical plushie tag', async () => {
+  it('provisions a coloured wristband, reveals its mascot and refreshes quests once daily', async () => {
     const { authorization } = await createMember('pair@example.com', 'Mina');
-    const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'CALICO-0004' });
+    const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'SUNSET-0004', wristbandColor: 'sunset-orange' });
     assert.equal(provisioned.status, 201);
-    assert.match(provisioned.body.ndefUrl, /^novo:\/\/plushie\//);
+    assert.match(provisioned.body.ndefUrl, /^novo:\/\/wristband\//);
     const tagToken = provisioned.body.tag.token;
-    const paired = await request(app).post('/api/member/plushie/pair').set('authorization', authorization).send({ tagToken });
+    const paired = await request(app).post('/api/member/wristband/pair').set('authorization', authorization).send({ tagToken, pickupLocation: 'Pick! Locker @ Tampines' });
     assert.equal(paired.status, 200);
-    assert.equal(paired.body.user.plushiePaired, true);
+    assert.equal(paired.body.user.wristbandPaired, true);
+    assert.equal(paired.body.user.wristbandColor, 'sunset-orange');
+    assert.equal(paired.body.user.mascotType, 'fox');
     assert.equal(paired.body.user.streak, 0);
-    assert.equal(paired.body.user.lastPlushieScanAt, null);
+    assert.equal(paired.body.user.lastWristbandTapAt, null);
     assert.deepEqual(paired.body.user.dailyQuests, []);
-    const interacted = await request(app).post('/api/member/plushie/interact').set('authorization', authorization).send({ tagToken });
+    const interacted = await request(app).post('/api/member/wristband/interact').set('authorization', authorization).send({ tagToken });
     assert.equal(interacted.status, 200);
     assert.equal(interacted.body.user.streak, 1);
     assert.equal(interacted.body.user.dailyQuests.length, 3);
-    assert.equal(interacted.body.user.dailyQuests[0].sourceAccessoryId, 'bright-star');
+    assert.ok(interacted.body.user.dailyQuests[0].title);
     assert.equal(interacted.body.daily.questsRefreshed, true);
-    const repeated = await request(app).post('/api/member/plushie/interact').set('authorization', authorization).send({ tagToken });
+    const repeated = await request(app).post('/api/member/wristband/interact').set('authorization', authorization).send({ tagToken });
     assert.equal(repeated.status, 200);
     assert.equal(repeated.body.user.streak, 1);
     assert.equal(repeated.body.daily.questsRefreshed, false);
@@ -68,7 +74,7 @@ describe('novo API', () => {
 
   it('rejects an unprepared NFC tag', async () => {
     const { authorization } = await createMember('badtag@example.com');
-    const response = await request(app).post('/api/member/plushie/pair').set('authorization', authorization).send({ tagToken: 'abcdefghijklmnopqrstuvwxyz123456' });
+    const response = await request(app).post('/api/member/wristband/pair').set('authorization', authorization).send({ tagToken: 'abcdefghijklmnopqrstuvwxyz123456', pickupLocation: 'Pick! Locker' });
     assert.equal(response.status, 404);
   });
 
@@ -78,6 +84,9 @@ describe('novo API', () => {
     assert.equal(submitted.status, 201);
     assert.equal(submitted.body.automated, false);
     assert.equal(submitted.body.submission.status, 'pending');
+    assert.equal(submitted.body.submission.photoDataUrl, undefined);
+    const memberTasks = await request(app).get('/api/member/tasks').set('authorization', authorization);
+    assert.equal(memberTasks.body.submissions[0].photoDataUrl, undefined);
     const reviewed = await request(app).post(`/api/portal/submissions/${submitted.body.submission.id}/review`).set('x-novo-role', 'staff').send({ decision: 'approved', points: 80 });
     assert.equal(reviewed.status, 200);
     assert.equal(reviewed.body.user.points, 80);
@@ -86,29 +95,48 @@ describe('novo API', () => {
     assert.ok(!queue.body.submissions.some((submission: { id: string }) => submission.id === submitted.body.submission.id));
   });
 
-  it('keeps an ordered accessory locked until its unique operations QR is paired', async () => {
+  it('accepts daily task evidence from the generated quest board', async () => {
+    const { authorization } = await createMember('daily-task@example.com');
+    const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'CALICO-DAILY-0001' });
+    const tagToken = provisioned.body.tag.token;
+    await request(app).post('/api/member/wristband/pair').set('authorization', authorization).send({ tagToken, pickupLocation: 'POPStation @ General Post Office' });
+    const interacted = await request(app).post('/api/member/wristband/interact').set('authorization', authorization).send({ tagToken });
+    const quest = interacted.body.user.dailyQuests[0];
+    assert.ok(quest?.id);
+
+    const submitted = await request(app).post(`/api/member/tasks/${quest.id}/submit`).set('authorization', authorization).send({ description: 'Completed this task and photographed the finished result.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('daily-photo').toString('base64')}` });
+    assert.equal(submitted.status, 201);
+    assert.equal(submitted.body.automated, false);
+    assert.equal(submitted.body.submission.questId, quest.id);
+    assert.equal(submitted.body.submission.status, 'pending');
+  });
+
+  it('unlocks an in-app accessory immediately without a locker or physical QR', async () => {
     const member = await createMember('accessory@example.com');
-    const evidence = await request(app).post('/api/member/tasks/custom').set('authorization', member.authorization).send({ title: 'Prepared recycling', description: 'Prepared enough recycling evidence to earn leaves for an accessory.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('photo').toString('base64')}` });
+    const evidence = await request(app).post('/api/member/tasks/custom').set('authorization', member.authorization).send({ title: 'Prepared recycling', description: 'Prepared enough recycling evidence to earn leaves for an accessory.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('accessory-photo').toString('base64')}` });
     await request(app).post(`/api/portal/submissions/${evidence.body.submission.id}/review`).set('x-novo-role', 'staff').send({ decision: 'approved', points: 500 });
-    const ordered = await request(app).post('/api/member/market/purchase').set('authorization', member.authorization).send({ accessoryId: 'sunny-cap', lockerLocation: 'Pick Locker @ Kallang MRT Station' });
-    assert.equal(ordered.status, 200);
-    assert.ok(ordered.body.user.pendingAccessories.includes('sunny-cap'));
-    assert.ok(!ordered.body.user.accessories.includes('sunny-cap'));
-    const blockedEquip = await request(app).post('/api/member/accessories/equip').set('authorization', member.authorization).send({ accessoryId: 'sunny-cap' });
-    assert.equal(blockedEquip.status, 403);
-    const queued = await request(app).get('/api/portal/fulfillment-orders').set('x-novo-role', 'staff');
-    assert.ok(queued.body.orders.some((order: { id: string; status: string }) => order.id === ordered.body.order.id && order.status === 'confirmed'));
-    const prepared = await request(app).post('/api/portal/accessory-tags').set('x-novo-role', 'staff').send({ label: 'SUNNY-A-001', accessoryId: 'sunny-cap', orderId: ordered.body.order.id });
-    assert.equal(prepared.status, 201);
-    assert.match(prepared.body.qrPayload, /^novo:\/\/accessory\//);
-    const tagged = await request(app).get('/api/portal/fulfillment-orders').set('x-novo-role', 'staff');
-    assert.ok(tagged.body.orders.some((order: { id: string; status: string }) => order.id === ordered.body.order.id && order.status === 'tagged'));
-    const paired = await request(app).post('/api/member/accessories/redeem').set('authorization', member.authorization).send({ code: prepared.body.qrPayload });
-    assert.equal(paired.status, 200);
-    assert.ok(paired.body.user.accessories.includes('sunny-cap'));
-    assert.ok(!paired.body.user.pendingAccessories.includes('sunny-cap'));
-    const delivered = await request(app).get('/api/portal/fulfillment-orders').set('x-novo-role', 'staff');
-    assert.ok(delivered.body.orders.some((order: { id: string; status: string }) => order.id === ordered.body.order.id && order.status === 'delivered'));
+    const unlocked = await request(app).post('/api/member/market/purchase').set('authorization', member.authorization).send({ accessoryId: 'sunny-cap' });
+    assert.equal(unlocked.status, 200);
+    assert.ok(unlocked.body.user.accessories.includes('sunny-cap'));
+    assert.ok(unlocked.body.user.equippedAccessories.includes('sunny-cap'));
+    assert.equal(unlocked.body.order, undefined);
+    const toggled = await request(app).post('/api/member/accessories/equip').set('authorization', member.authorization).send({ accessoryId: 'sunny-cap' });
+    assert.equal(toggled.status, 200);
+    assert.ok(!toggled.body.user.equippedAccessories.includes('sunny-cap'));
+    const retiredQrFlow = await request(app).post('/api/member/accessories/redeem').set('authorization', member.authorization).send({ code: 'NOVO-SUNNY-01' });
+    assert.equal(retiredQrFlow.status, 410);
+  });
+
+  it('stores a redeemed coupon in the member rewards wallet', async () => {
+    const member = await createMember('coupon@example.com');
+    const evidence = await request(app).post('/api/member/tasks/custom').set('authorization', member.authorization).send({ title: 'Reusable container', description: 'Used a reusable container and recorded it in the novo camera.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('coupon-photo').toString('base64')}` });
+    await request(app).post(`/api/portal/submissions/${evidence.body.submission.id}/review`).set('x-novo-role', 'staff').send({ decision: 'approved', points: 300 });
+    const redeemed = await request(app).post('/api/member/market/coupon/redeem').set('authorization', member.authorization).send({ offerId: 'green-cafe-5', name: '$5 Green Café coupon', points: 250 });
+    assert.equal(redeemed.status, 200);
+    assert.equal(redeemed.body.user.coupons.length, 1);
+    assert.equal(redeemed.body.user.coupons[0].offerId, 'green-cafe-5');
+    assert.match(redeemed.body.user.coupons[0].code, /^NOVO-[A-F0-9]{8}$/);
+    assert.equal(redeemed.body.user.points, 50);
   });
 
   it('provides CRUD operations for events, marketplace items and accounts', async () => {
@@ -149,6 +177,16 @@ describe('novo API', () => {
     assert.ok(response.body.locations.some((location: { kind: string }) => location.kind === 'return-right'));
     assert.ok(response.body.locations.some((location: { kind: string }) => location.kind === 'pick-locker'));
     assert.ok(response.body.locations.some((location: { kind: string }) => location.kind === 'singpost-locker'));
+    const returnRight = await request(app).get('/api/locations?kind=return-right');
+    assert.equal(returnRight.status, 200);
+    assert.equal(returnRight.body.locations.length, 3);
+    assert.ok(returnRight.body.locations.every((location: { kind: string }) => location.kind === 'return-right'));
+    const member = await createMember('locker-search@example.com', 'Locker');
+    const lockers = await request(app).get('/api/member/wristband/pickup-locations?q=admiralty&provider=pick').set('authorization', member.authorization);
+    assert.equal(lockers.status, 200);
+    assert.equal(lockers.body.lockers.length, 1);
+    assert.equal(lockers.body.lockers[0].kind, 'pick-locker');
+    assert.equal(lockers.body.directoryTotal, 6);
   });
 
   it('builds a leaderboard from persisted lifetime leaves', async () => {
@@ -158,21 +196,27 @@ describe('novo API', () => {
     assert.ok(response.body.leaders.some((entry: { name: string }) => entry.name === 'Leaf'));
   });
 
-  it('allows an organizer to create an unlimited event and check in a member', async () => {
+  it('allows an organizer to verify completed attendance by paired wristband', async () => {
     const member = await createMember('attendee@example.com');
     const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const created = await request(app).post('/api/portal/events').set('x-novo-role', 'organizer').send({ organizerId: 'organizer', title: 'Community repair circle', location: 'Bedok Community Centre', startsAt, durationMinutes: 120, capacity: null, points: 140, status: 'open' });
     assert.equal(created.status, 201);
     assert.equal(typeof created.body.event.latitude, 'number');
     assert.equal(typeof created.body.event.longitude, 'number');
-    const checkedIn = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ attendeeId: member.user.id });
-    assert.equal(checkedIn.status, 200);
-    assert.deepEqual(checkedIn.body.event.attendees, [member.user.id]);
     const memberTasks = await request(app).get('/api/member/tasks').set('authorization', member.authorization);
     assert.ok(memberTasks.body.events.some((event: { id: string; status: string }) => event.id === created.body.event.id && event.status === 'scheduled'));
     const registered = await request(app).post(`/api/member/events/${created.body.event.id}/signup`).set('authorization', member.authorization);
     assert.equal(registered.status, 200);
     assert.equal(registered.body.event.registered, true);
+    const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'EVENT-BAND-1', wristbandColor: 'ocean-blue' });
+    const tagToken = provisioned.body.tag.token;
+    await request(app).post('/api/member/wristband/pair').set('authorization', member.authorization).send({ tagToken, pickupLocation: 'Pick! Locker @ Bedok' });
+    const checkedIn = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ tagToken });
+    assert.equal(checkedIn.status, 200);
+    assert.deepEqual(checkedIn.body.event.checkedInUserIds, [member.user.id]);
+    assert.equal(checkedIn.body.pointsAwarded, 140);
+    const repeated = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ tagToken });
+    assert.equal(repeated.status, 409);
   });
 
   it('routes configured operations roles to the operations portal', async () => {
@@ -191,5 +235,26 @@ describe('novo API', () => {
     assert.equal(exchanged.status, 200);
     const reused = await request(app).post('/api/auth/mobile-handoff/exchange').send({ handoffToken: signedIn.body.handoffToken });
     assert.equal(reused.status, 401);
+  });
+
+  it('revokes member and operations sessions on sign out', async () => {
+    const member = await createMember('logout-member@example.com', 'Logout Member');
+    const memberBefore = await request(app).get('/api/auth/mobile-session').set('Authorization', member.authorization);
+    assert.equal(memberBefore.status, 200);
+
+    const memberSignOut = await request(app).post('/api/auth/sign-out').set('Authorization', member.authorization);
+    assert.equal(memberSignOut.status, 204);
+    const memberAfter = await request(app).get('/api/auth/mobile-session').set('Authorization', member.authorization);
+    assert.equal(memberAfter.status, 401);
+
+    const operations = await request(app).post('/api/auth/web-sign-in').send({ email: 'admin@example.com', password: 'password' });
+    assert.equal(operations.status, 200);
+    const operationsBefore = await request(app).get('/api/auth/session').set('Authorization', `Bearer ${operations.body.token}`);
+    assert.equal(operationsBefore.status, 200);
+
+    const operationsSignOut = await request(app).post('/api/auth/sign-out').set('Authorization', `Bearer ${operations.body.token}`);
+    assert.equal(operationsSignOut.status, 204);
+    const operationsAfter = await request(app).get('/api/auth/session').set('Authorization', `Bearer ${operations.body.token}`);
+    assert.equal(operationsAfter.status, 401);
   });
 });
