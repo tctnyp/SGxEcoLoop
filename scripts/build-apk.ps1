@@ -96,6 +96,24 @@ function Get-Sha256Hash([string]$FilePath) {
   }
 }
 
+function Invoke-NativeCapture([string]$FilePath, [string[]]$Arguments) {
+  # Windows PowerShell converts native stderr into ErrorRecord objects when
+  # ErrorActionPreference is Stop. Temporarily relax it so adb failures can be
+  # inspected and handled instead of aborting the whole build unexpectedly.
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = @(& $FilePath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  return [pscustomobject]@{
+    ExitCode = $exitCode
+    Output = ($output | ForEach-Object { "$_" }) -join "`n"
+  }
+}
+
 function Find-CompatibleJavaHome {
   $candidateHomes = [System.Collections.Generic.List[string]]::new()
   if ($env:JAVA_HOME) { $candidateHomes.Add($env:JAVA_HOME) }
@@ -165,16 +183,21 @@ if ($buildAndroid -and $Environment -eq 'Development' -and $androidMode -eq 'Clo
   throw 'Development Android builds use this computer''s current LAN address and must be built locally. Use -Mode Local or Auto for Android.'
 }
 
-Write-Host "Build environment: $environmentName"
-Write-Host "App title: $(if ($Environment -eq 'Development') { 'novo Development' } elseif ($Environment -eq 'Beta') { 'novo Beta' } else { 'novo' })"
-Write-Host "Embedded API URL: $ApiUrl"
-Write-Host "Requested platform: $($Platform.ToLowerInvariant())"
-if ($buildAndroid) { Write-Host "Android builder: $($androidMode.ToLowerInvariant())" }
-if ($buildAndroid) { Write-Host "Android signing: $(if ($androidMode -eq 'Local') { 'local development key' } else { 'EAS distribution credentials' })" }
-if ($buildIos) { Write-Host "iOS builder: $($iosMode.ToLowerInvariant())" }
-if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interface) ($($detectedNetwork.Address))" }
+function Write-ResolvedConfiguration {
+  Write-Host "Build environment: $environmentName"
+  Write-Host "App title: $(if ($Environment -eq 'Development') { 'novo Development' } elseif ($Environment -eq 'Beta') { 'novo Beta' } else { 'novo' })"
+  Write-Host "Embedded API URL: $ApiUrl"
+  Write-Host "Requested platform: $($Platform.ToLowerInvariant())"
+  if ($buildAndroid) { Write-Host "Android builder: $($androidMode.ToLowerInvariant())" }
+  if ($buildAndroid) { Write-Host "Android signing: $(if ($androidMode -eq 'Local') { 'local development key' } else { 'EAS distribution credentials' })" }
+  if ($buildIos) { Write-Host "iOS builder: $($iosMode.ToLowerInvariant())" }
+  if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interface) ($($detectedNetwork.Address))" }
+}
 
-if ($ShowConfig) { exit 0 }
+if ($ShowConfig) {
+  Write-ResolvedConfiguration
+  exit 0
+}
 
 $androidSdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 if ($Environment -eq 'Development' -and -not $SkipServerCheck) {
@@ -195,24 +218,52 @@ if ($Environment -eq 'Development' -and -not $SkipServerCheck) {
 
   $adbExe = Join-Path $androidSdk 'platform-tools\adb.exe'
   if ($buildAndroid -and (Test-Path -LiteralPath $adbExe)) {
-    $physicalDevices = foreach ($line in (& $adbExe devices 2>$null)) {
+    $adbDevices = Invoke-NativeCapture $adbExe @('devices')
+    $physicalDevices = foreach ($line in ($adbDevices.Output -split "`r?`n")) {
       if ($line -match '^([^\s]+)\s+device$' -and $Matches[1] -notmatch '^emulator-') { $Matches[1] }
     }
+    $lanUnavailableFromDevice = $false
     foreach ($serial in $physicalDevices) {
-      $curlPath = (& $adbExe -s $serial shell 'command -v curl' 2>$null | Select-Object -First 1)
-      if (-not $curlPath) {
+      $curlLookup = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'command -v curl')
+      if ($curlLookup.ExitCode -ne 0 -or -not $curlLookup.Output.Trim()) {
         Write-Warning "Android device $serial is connected, but it does not provide curl; device-side API verification was skipped."
         continue
       }
-      $deviceHealth = & $adbExe -s $serial shell curl --silent --show-error --connect-timeout 5 --max-time 8 "$ApiUrl/health" 2>&1
-      $deviceHealthText = $deviceHealth -join "`n"
-      if ($LASTEXITCODE -ne 0 -or $deviceHealthText -notmatch '"ok"\s*:\s*true') {
-        throw "Android device $serial cannot reach $ApiUrl. Confirm that the phone is on the same Wi-Fi, disable client isolation, and allow Node.js or TCP port $ServerPort through Windows Firewall. Device response: $deviceHealthText"
+      $deviceHealth = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'curl', '--silent', '--show-error', '--connect-timeout', '5', '--max-time', '8', "$ApiUrl/health")
+      if ($deviceHealth.ExitCode -ne 0 -or $deviceHealth.Output -notmatch '"ok"\s*:\s*true') {
+        $lanUnavailableFromDevice = $true
+        Write-Warning "Android device $serial cannot reach $ApiUrl over the local network. Device response: $($deviceHealth.Output)"
+        continue
       }
       Write-Host "Android device health check: reachable from $serial"
     }
+
+    if ($lanUnavailableFromDevice) {
+      $loopbackApiUrl = "http://127.0.0.1:$ServerPort/api"
+      foreach ($serial in $physicalDevices) {
+        $reverse = Invoke-NativeCapture $adbExe @('-s', $serial, 'reverse', "tcp:$ServerPort", "tcp:$ServerPort")
+        if ($reverse.ExitCode -ne 0) {
+          throw "Android device $serial cannot reach the development API over Wi-Fi, and the ADB USB tunnel could not be created. Confirm USB debugging is enabled, or connect the phone and computer to a network without client isolation. ADB response: $($reverse.Output)"
+        }
+
+        $curlLookup = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'command -v curl')
+        if ($curlLookup.ExitCode -eq 0 -and $curlLookup.Output.Trim()) {
+          $reverseHealth = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'curl', '--silent', '--show-error', '--connect-timeout', '5', '--max-time', '8', "$loopbackApiUrl/health")
+          if ($reverseHealth.ExitCode -ne 0 -or $reverseHealth.Output -notmatch '"ok"\s*:\s*true') {
+            throw "The ADB USB tunnel was created for Android device $serial, but the API health check still failed. Keep the server running on port $ServerPort. Device response: $($reverseHealth.Output)"
+          }
+        }
+        Write-Host "Android device health check: reachable through ADB USB tunnel on $serial"
+      }
+
+      $ApiUrl = $loopbackApiUrl
+      $env:EXPO_PUBLIC_API_URL = $ApiUrl
+      Write-Warning 'This development APK uses an ADB USB tunnel because the phone cannot reach the computer over Wi-Fi. Keep USB debugging connected and the API server running while testing.'
+    }
   }
 }
+
+Write-ResolvedConfiguration
 
 if ($VerifyOnly) {
   Write-Host 'Development connectivity verification completed; no mobile artifact was built.'
