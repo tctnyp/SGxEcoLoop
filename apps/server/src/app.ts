@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
@@ -95,6 +95,7 @@ type AccessoryQrTag = { id: string; token: string; accessoryId: AccessoryId; lab
 type WebSession = { token: string; accountId: string; role: PortalAccount['role']; expiresAt: number };
 type MobileSession = { token: string; userId: string; expiresAt: number };
 type MobileHandoff = { token: string; userId: string; expiresAt: number; consumed: boolean };
+type Credential = { email: string; salt: string; passwordHash: string };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -107,6 +108,7 @@ const fulfillmentOrders = new Map<string, FulfillmentOrder>();
 const donations = new Map<string, Donation>();
 const nfcTags = new Map<string, NfcTag>();
 const accessoryQrTags = new Map<string, AccessoryQrTag>();
+const credentials = new Map<string, Credential>();
 
 const persistedCollections = {
   users,
@@ -121,7 +123,20 @@ const persistedCollections = {
   webSessions,
   mobileSessions,
   mobileHandoffs,
+  credentials,
 } as unknown as PersistedCollections;
+
+function passwordMatches(email: string, password: string) {
+  const credential = credentials.get(email.toLowerCase());
+  if (!credential) return true;
+  try {
+    const expected = Buffer.from(credential.passwordHash, 'hex');
+    const actual = scryptSync(password, credential.salt, expected.length);
+    return expected.length > 0 && timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
 
 function coordinatesForSingaporeLocation(location: string) {
   const normalized = location.toLowerCase();
@@ -548,9 +563,10 @@ app.post('/api/auth/email-status', (request, response, next) => {
 
 app.post('/api/auth/sign-in', async (request, response, next) => {
   try {
-    const { email } = signInSchema.parse(request.body);
+    const { email, password } = signInSchema.parse(request.body);
     const existing = users.get(email.toLowerCase());
     if (!existing) return response.json({ isNewUser: true, draft: { name: '', email: email.toLowerCase() } });
+    if (!passwordMatches(email, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const token = createMobileSession(existing.id);
     await persistDatabase(persistedCollections);
     response.json({ isNewUser: false, token, user: existing });
@@ -561,7 +577,7 @@ app.post('/api/auth/sign-in', async (request, response, next) => {
 
 app.post('/api/auth/web-sign-in', async (request, response, next) => {
   try {
-    const { email } = signInSchema.parse(request.body);
+    const { email, password } = signInSchema.parse(request.body);
     const normalizedEmail = email.toLowerCase();
     let account = findPortalAccountByEmail(normalizedEmail);
     let user = users.get(normalizedEmail);
@@ -569,6 +585,7 @@ app.post('/api/auth/web-sign-in', async (request, response, next) => {
     if (!account) return response.status(401).json({ message: 'No account was found. Create your account in the novo app first.' });
 
     if (account.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
+    if (!passwordMatches(normalizedEmail, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const session = createWebSession(account);
     const privileged = account.role !== 'member';
     const handoffToken = !privileged && user ? createMobileHandoff(user.id) : undefined;

@@ -1,4 +1,5 @@
 import { closeDatabase, databaseTarget, initializeDatabase, PersistedCollections, resetDatabase } from './database.js';
+import { randomBytes, scryptSync } from 'node:crypto';
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
 type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; sourceAccessoryId?: AccessoryId; sourceAccessoryName?: string };
@@ -58,6 +59,17 @@ const members: DemoMember[] = [
 ];
 
 const users = new Map(members.map((member) => [member.email, member]));
+const demoPassword = process.env.NOVO_DEMO_PASSWORD || 'novo2026';
+const credential = (email: string) => {
+  const salt = randomBytes(16).toString('hex');
+  return { email, salt, passwordHash: scryptSync(demoPassword, salt, 64).toString('hex') };
+};
+const credentials = new Map([
+  'amira.tan@demo.novo.sg',
+  'organizer@demo.novo.sg',
+  'staff@demo.novo.sg',
+  'admin@demo.novo.sg',
+].map((email) => [email, credential(email)]));
 const portalAccounts = new Map<string, unknown>([
   ...members.map((member) => [member.id, { id: member.id, name: member.name, email: member.email, role: 'member', status: 'active' }] as [string, unknown]),
   ['admin_nadia', { id: 'admin_nadia', name: 'Nadia Lim', email: 'admin@demo.novo.sg', role: 'admin', status: 'active' }],
@@ -109,7 +121,7 @@ const donations = new Map<string, unknown>([
   ['don_devan', { id: 'don_devan', userId: 'member_devan', causeId: 'food-rescue', causeName: 'Neighbourhood Food Rescue', points: 200, createdAt: iso(-7, 18) }],
 ]);
 
-const collections = { users, portalAccounts, portalEvents, marketItems, submissions, fulfillmentOrders, donations, nfcTags, accessoryQrTags } as unknown as PersistedCollections;
+const collections = { users, portalAccounts, portalEvents, marketItems, submissions, fulfillmentOrders, donations, nfcTags, accessoryQrTags, credentials } as unknown as PersistedCollections;
 
 try {
   await resetDatabase();

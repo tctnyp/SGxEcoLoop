@@ -20,5 +20,5 @@ Migrate an existing SQLite database by setting `NOVO_SQLITE_SOURCE` and the Mari
 
 Run checks from the repository root with `npm test` and intentionally clear the configured database with `npm run db:reset`.
 
-Before public deployment, add password hashing and recovery, durable refresh-token sessions, rate limiting, audit logs, versioned schema migrations/backups, object storage for evidence photos, and managed secrets.
+Before public deployment, add password recovery, durable refresh-token sessions, rate limiting, audit logs, versioned schema migrations/backups, object storage for evidence photos, and managed secrets. Demo credentials are hashed with scrypt when the demo database is seeded.
 
