@@ -193,10 +193,18 @@ describe('novo API', () => {
     assert.equal(changedItem.body.item.stock, 7);
     assert.equal((await request(app).delete(`/api/portal/market/${createdItem.body.item.id}`).set('x-novo-role', 'admin')).status, 204);
 
-    const createdAccount = await request(app).post('/api/portal/accounts').set('x-novo-role', 'admin').send({ name: 'CRUD Staff', email: 'crud-staff@example.com', role: 'staff', status: 'active' });
+    const createdAccount = await request(app).post('/api/portal/accounts').set('x-novo-role', 'admin').send({ name: 'CRUD Member', email: 'crud-member@example.com', password: 'member-pass-1', role: 'member', status: 'active', points: 120, lifetimePoints: 300, streak: 4, mascotName: 'Sprout' });
     assert.equal(createdAccount.status, 201);
-    const changedAccount = await request(app).patch(`/api/portal/accounts/${createdAccount.body.account.id}`).set('x-novo-role', 'admin').send({ status: 'review' });
-    assert.equal(changedAccount.body.account.status, 'review');
+    assert.equal(createdAccount.body.account.member.points, 120);
+    assert.equal(createdAccount.body.account.passwordSet, true);
+    const accounts = await request(app).get('/api/portal/accounts').set('x-novo-role', 'admin');
+    assert.equal(accounts.body.accounts.find((account: { email: string }) => account.email === 'crud-member@example.com').member.mascotName, 'Sprout');
+    const changedAccount = await request(app).patch(`/api/portal/accounts/${createdAccount.body.account.id}`).set('x-novo-role', 'admin').send({ role: 'staff', points: 999, lifetimePoints: 1200, streak: 8, password: 'member-pass-2' });
+    assert.equal(changedAccount.body.account.role, 'staff');
+    assert.equal(changedAccount.body.account.member.points, 999);
+    assert.equal((await request(app).post('/api/auth/web-sign-in').send({ email: 'crud-member@example.com', password: 'member-pass-1' })).status, 401);
+    const staffSignIn = await request(app).post('/api/auth/web-sign-in').send({ email: 'crud-member@example.com', password: 'member-pass-2' });
+    assert.equal(staffSignIn.body.role, 'staff');
     assert.equal((await request(app).delete(`/api/portal/accounts/${createdAccount.body.account.id}`).set('x-novo-role', 'admin')).status, 204);
   });
 

@@ -138,6 +138,27 @@ function passwordMatches(email: string, password: string) {
   }
 }
 
+function createCredential(email: string, password: string): Credential {
+  const salt = randomBytes(16).toString('hex');
+  return { email: email.toLowerCase(), salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
+}
+
+function accountView(account: PortalAccount) {
+  const member = findUser(account.id);
+  return {
+    ...account,
+    passwordSet: credentials.has(account.email.toLowerCase()),
+    member: member ? {
+      points: member.points,
+      lifetimePoints: member.lifetimePoints,
+      streak: member.streak,
+      mascotName: member.mascotName,
+      wristbandPaired: member.wristbandPaired,
+      wristbandColor: member.wristbandColor,
+    } : null,
+  };
+}
+
 function coordinatesForSingaporeLocation(location: string) {
   const normalized = location.toLowerCase();
   const known: Array<[string[], number, number]> = [
@@ -166,17 +187,17 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
   let changed = false;
   const now = Date.now();
   for (const [token, session] of webSessions) {
-    if (session.expiresAt > now) continue;
+    if (session.expiresAt > now && portalAccounts.has(session.accountId)) continue;
     webSessions.delete(token);
     changed = true;
   }
   for (const [token, session] of mobileSessions) {
-    if (session.expiresAt > now) continue;
+    if (session.expiresAt > now && findUser(session.userId)) continue;
     mobileSessions.delete(token);
     changed = true;
   }
   for (const [token, handoff] of mobileHandoffs) {
-    if (handoff.expiresAt > now && !handoff.consumed) continue;
+    if (handoff.expiresAt > now && !handoff.consumed && findUser(handoff.userId)) continue;
     mobileHandoffs.delete(token);
     changed = true;
   }
@@ -192,9 +213,17 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
     user.dailyQuests ??= [];
     user.coupons ??= [];
     user.friendIds ??= [];
+    const uniqueFriendIds = [...new Set(user.friendIds)].filter((friendId) => friendId !== user.id);
+    if (uniqueFriendIds.length !== user.friendIds.length) { user.friendIds = uniqueFriendIds; changed = true; }
     user.notificationPreferences ??= { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true };
   }
-  for (const submission of submissions.values()) {
+  const validUserIds = new Set([...users.values()].map((user) => user.id));
+  for (const user of users.values()) {
+    const validFriendIds = user.friendIds.filter((friendId) => validUserIds.has(friendId));
+    if (validFriendIds.length !== user.friendIds.length) { user.friendIds = validFriendIds; changed = true; }
+  }
+  for (const [submissionId, submission] of submissions) {
+    if (!validUserIds.has(submission.userId)) { submissions.delete(submissionId); changed = true; continue; }
     submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
     submission.aiAccepted ??= submission.status === 'approved' && submission.aiConfidence !== null && submission.aiConfidence >= 0.8;
     submission.aiDetections ??= [];
@@ -205,20 +234,34 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
     submission.photoFingerprint ??= fingerprintPhoto(submission.photoDataUrl);
     submission.photoEmbedding ??= null;
   }
-  for (const order of fulfillmentOrders.values()) order.status ??= 'confirmed';
+  for (const [orderId, order] of fulfillmentOrders) {
+    if (!validUserIds.has(order.userId)) { fulfillmentOrders.delete(orderId); changed = true; continue; }
+    order.status ??= 'confirmed';
+  }
+  for (const [donationId, donation] of donations) if (!validUserIds.has(donation.userId)) { donations.delete(donationId); changed = true; }
   for (const tag of nfcTags.values()) {
     tag.wristbandColor ??= 'snowy-white';
     tag.mascotType ??= WRISTBAND_MASCOTS[tag.wristbandColor];
+    if (tag.pairedUserId && !validUserIds.has(tag.pairedUserId)) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; changed = true; }
   }
-  for (const tag of accessoryQrTags.values()) tag.orderId ??= null;
+  for (const tag of accessoryQrTags.values()) {
+    tag.orderId ??= null;
+    if (tag.pairedUserId && !validUserIds.has(tag.pairedUserId)) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; changed = true; }
+  }
   for (const event of portalEvents.values()) {
     event.checkedInUserIds ??= [];
+    const attendees = [...new Set(event.attendees)].filter((userId) => validUserIds.has(userId));
+    const checkedInUserIds = [...new Set(event.checkedInUserIds)].filter((userId) => attendees.includes(userId));
+    if (attendees.length !== event.attendees.length) { event.attendees = attendees; changed = true; }
+    if (checkedInUserIds.length !== event.checkedInUserIds.length) { event.checkedInUserIds = checkedInUserIds; changed = true; }
     if (typeof event.latitude === 'number' && typeof event.longitude === 'number') continue;
     const coordinates = coordinatesForSingaporeLocation(event.location);
     event.latitude = coordinates.latitude;
     event.longitude = coordinates.longitude;
     changed = true;
   }
+  const accountEmails = new Set([...portalAccounts.values()].map((account) => account.email.toLowerCase()));
+  for (const [email] of credentials) if (!accountEmails.has(email.toLowerCase())) { credentials.delete(email); changed = true; }
   const configuredRoles: Array<[string | undefined, PortalRole]> = [
     [process.env.NOVO_ORGANIZER_EMAIL, 'organizer'],
     [process.env.NOVO_STAFF_EMAIL, 'staff'],
@@ -272,8 +315,28 @@ const eventSchema = z.object({
   longitude: z.number().min(-180).max(180).nullable().optional(),
 });
 const checkInSchema = z.object({ tagToken: z.string().trim().min(24).max(200) });
-const accountPatchSchema = z.object({ name: z.string().trim().min(1).max(80).optional(), email: z.string().email().optional(), role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(), status: z.enum(['active', 'review', 'suspended']).optional() }).refine((value) => Object.keys(value).length > 0, 'Provide at least one account change.');
-const accountCreateSchema = z.object({ name: z.string().trim().min(1).max(80), email: z.string().email(), role: z.enum(['member', 'organizer', 'staff', 'admin']), status: z.enum(['active', 'review', 'suspended']).default('active') });
+const accountPatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  email: z.string().email().optional(),
+  role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(),
+  status: z.enum(['active', 'review', 'suspended']).optional(),
+  password: z.string().min(6).max(128).optional(),
+  points: z.number().int().min(0).max(10_000_000).optional(),
+  lifetimePoints: z.number().int().min(0).max(100_000_000).optional(),
+  streak: z.number().int().min(0).max(100_000).optional(),
+  mascotName: z.string().trim().min(1).max(30).optional(),
+}).refine((value) => Object.keys(value).length > 0, 'Provide at least one account change.');
+const accountCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  email: z.string().email(),
+  role: z.enum(['member', 'organizer', 'staff', 'admin']),
+  status: z.enum(['active', 'review', 'suspended']).default('active'),
+  password: z.string().min(6).max(128),
+  points: z.number().int().min(0).max(10_000_000).default(0),
+  lifetimePoints: z.number().int().min(0).max(100_000_000).default(0),
+  streak: z.number().int().min(0).max(100_000).default(0),
+  mascotName: z.string().trim().min(1).max(30).default('Nova'),
+});
 const marketSchema = z.object({ name: z.string().trim().min(2).max(80), category: z.enum(['accessory', 'charity', 'coupon']), price: z.number().int().min(0).max(100000), stock: z.number().int().min(0).nullable(), active: z.boolean().default(true) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'tagged', 'dispatched', 'delivered', 'cancelled']) });
 const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000) });
@@ -566,6 +629,8 @@ app.post('/api/auth/sign-in', async (request, response, next) => {
     const { email, password } = signInSchema.parse(request.body);
     const existing = users.get(email.toLowerCase());
     if (!existing) return response.json({ isNewUser: true, draft: { name: '', email: email.toLowerCase() } });
+    const account = findPortalAccountByEmail(email);
+    if (account?.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
     if (!passwordMatches(email, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const token = createMobileSession(existing.id);
     await persistDatabase(persistedCollections);
@@ -1302,21 +1367,26 @@ app.delete('/api/portal/market/:itemId', requirePortalRole('staff', 'admin'), (r
 });
 
 app.get('/api/portal/accounts', requirePortalRole('admin'), (_request, response) => {
-  response.json({ accounts: [...portalAccounts.values()] });
+  const accounts = [...portalAccounts.values()]
+    .map(accountView)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  response.json({ accounts });
 });
 
 app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response, next) => {
   try {
     const input = accountCreateSchema.parse(request.body);
     if (findPortalAccountByEmail(input.email)) return response.status(409).json({ message: 'An account with this email already exists.' });
-    const account: PortalAccount = { id: `account_${crypto.randomUUID()}`, ...input, email: input.email.toLowerCase() };
+    const { password, points, lifetimePoints, streak, mascotName, ...accountInput } = input;
+    const account: PortalAccount = { id: `account_${crypto.randomUUID()}`, ...accountInput, email: input.email.toLowerCase() };
     portalAccounts.set(account.id, account);
+    credentials.set(account.email, createCredential(account.email, password));
     if (account.role === 'member') {
       users.set(account.email, {
         id: account.id,
         name: account.name,
         email: account.email,
-        mascotName: 'Nova',
+        mascotName,
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',
         wristbandPaired: false,
@@ -1325,16 +1395,16 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
         equippedAccessories: [],
         friendIds: [],
         notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
-        streak: 0,
-        points: 0,
-        lifetimePoints: 0,
+        streak,
+        points,
+        lifetimePoints: Math.max(points, lifetimePoints),
         lastWristbandTapAt: null,
         questBoardDate: null,
         dailyQuests: [],
         coupons: [],
       });
     }
-    response.status(201).json({ account });
+    response.status(201).json({ account: accountView(account) });
   } catch (error) { next(error); }
 });
 
@@ -1344,19 +1414,63 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
     const account = portalAccounts.get(routeParam(request.params.accountId));
     if (!account) return response.status(404).json({ message: 'Account not found.' });
     if (changes.email && changes.email.toLowerCase() !== account.email.toLowerCase() && findPortalAccountByEmail(changes.email)) return response.status(409).json({ message: 'An account with this email already exists.' });
-    const member = findUser(account.id);
-    if (member) {
-      const previousEmail = member.email.toLowerCase();
-      if (changes.name) member.name = changes.name;
-      if (changes.email) {
-        member.email = changes.email.toLowerCase();
-        users.delete(previousEmail);
-        users.set(member.email, member);
-      }
+    const activeSession = sessionFromRequest(request);
+    if (activeSession?.accountId === account.id && ((changes.role && changes.role !== 'admin') || (changes.status && changes.status !== 'active'))) {
+      return response.status(409).json({ message: 'You cannot remove access from the administrator account currently in use.' });
     }
-    Object.assign(account, changes);
+
+    const previousEmail = account.email.toLowerCase();
+    const { password, points, lifetimePoints, streak, mascotName, ...accountChanges } = changes;
+    Object.assign(account, accountChanges);
     account.email = account.email.toLowerCase();
-    response.json({ account });
+    let member = findUser(account.id);
+    if (account.role === 'member' && !member) {
+      member = {
+        id: account.id,
+        name: account.name,
+        email: account.email,
+        mascotName: mascotName ?? 'Nova',
+        mascotType: 'polar-bear',
+        wristbandColor: 'snowy-white',
+        wristbandPaired: false,
+        wristbandPickupLocation: null,
+        accessories: [],
+        equippedAccessories: [],
+        friendIds: [],
+        notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
+        streak: streak ?? 0,
+        points: points ?? 0,
+        lifetimePoints: Math.max(points ?? 0, lifetimePoints ?? 0),
+        lastWristbandTapAt: null,
+        questBoardDate: null,
+        dailyQuests: [],
+        coupons: [],
+      };
+      users.set(account.email, member);
+    } else if (member) {
+      users.delete(member.email.toLowerCase());
+      member.name = account.name;
+      member.email = account.email;
+      if (points !== undefined) member.points = points;
+      member.lifetimePoints = Math.max(member.points, lifetimePoints ?? member.lifetimePoints);
+      if (streak !== undefined) member.streak = streak;
+      if (mascotName !== undefined) member.mascotName = mascotName;
+      users.set(member.email, member);
+    }
+
+    const existingCredential = credentials.get(previousEmail);
+    if (previousEmail !== account.email) {
+      credentials.delete(previousEmail);
+      if (existingCredential) credentials.set(account.email, { ...existingCredential, email: account.email });
+    }
+    if (password) credentials.set(account.email, createCredential(account.email, password));
+
+    if (password || changes.role || changes.status) {
+      for (const [token, session] of webSessions) if (session.accountId === account.id && token !== request.header('authorization')?.replace(/^Bearer /, '')) webSessions.delete(token);
+      for (const [token, session] of mobileSessions) if (session.userId === account.id) mobileSessions.delete(token);
+      for (const [token, handoff] of mobileHandoffs) if (handoff.userId === account.id) mobileHandoffs.delete(token);
+    }
+    response.json({ account: accountView(account) });
   } catch (error) {
     next(error);
   }
@@ -1370,9 +1484,23 @@ app.delete('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reque
   if (!account) return response.status(404).json({ message: 'Account not found.' });
   portalAccounts.delete(accountId);
   const member = findUser(accountId);
-  if (member) users.delete(member.email.toLowerCase());
+  if (member) {
+    users.delete(member.email.toLowerCase());
+    for (const other of users.values()) other.friendIds = other.friendIds.filter((friendId) => friendId !== accountId);
+    for (const [id, submission] of submissions) if (submission.userId === accountId) submissions.delete(id);
+    for (const [id, order] of fulfillmentOrders) if (order.userId === accountId) fulfillmentOrders.delete(id);
+    for (const [id, donation] of donations) if (donation.userId === accountId) donations.delete(id);
+    for (const event of portalEvents.values()) {
+      event.attendees = event.attendees.filter((userId) => userId !== accountId);
+      event.checkedInUserIds = event.checkedInUserIds.filter((userId) => userId !== accountId);
+    }
+    for (const tag of nfcTags.values()) if (tag.pairedUserId === accountId) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; }
+    for (const tag of accessoryQrTags.values()) if (tag.pairedUserId === accountId) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; }
+  }
+  credentials.delete(account.email.toLowerCase());
   for (const [token, value] of webSessions) if (value.accountId === accountId) webSessions.delete(token);
   for (const [token, value] of mobileSessions) if (value.userId === accountId) mobileSessions.delete(token);
+  for (const [token, value] of mobileHandoffs) if (value.userId === accountId) mobileHandoffs.delete(token);
   response.status(204).send();
 });
 
