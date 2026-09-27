@@ -1,0 +1,230 @@
+name: Mobile Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v1.0.6
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  android:
+    name: Android ${{ matrix.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - development
+          - production
+        include:
+          - environment: development
+            api_url: https://novodev.tancheetiong.com/api
+          - environment: production
+            api_url: https://novo.tancheetiong.com/api
+    env:
+      NOVO_BUILD_ENV: ${{ matrix.environment }}
+      EXPO_PUBLIC_API_URL: ${{ matrix.api_url }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Android project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Build APK
+        working-directory: apps/mobile/android
+        run: ./gradlew :app:assembleRelease --no-daemon --no-build-cache
+
+      - name: Verify and name APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_apk='apps/mobile/android/app/build/outputs/apk/release/app-release.apk'
+          test -f "$source_apk"
+          unzip -p "$source_apk" assets/index.android.bundle | grep -aFq "$EXPO_PUBLIC_API_URL"
+          mkdir -p release-assets
+          cp "$source_apk" "release-assets/novo-${NOVO_BUILD_ENV}.apk"
+          sha256sum "release-assets/novo-${NOVO_BUILD_ENV}.apk"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-${{ matrix.environment }}
+          path: release-assets/novo-${{ matrix.environment }}.apk
+          if-no-files-found: error
+          compression-level: 0
+
+  ios:
+    name: iOS ${{ matrix.environment }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - development
+          - production
+        include:
+          - environment: development
+            api_url: https://novodev.tancheetiong.com/api
+          - environment: production
+            api_url: https://novo.tancheetiong.com/api
+    env:
+      NOVO_BUILD_ENV: ${{ matrix.environment }}
+      EXPO_PUBLIC_API_URL: ${{ matrix.api_url }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate iOS project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform ios --no-install --clean
+
+      - name: Install CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install --repo-update
+
+      - name: Build unsigned iOS application
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace apps/mobile/ios/novo.xcworkspace \
+            -scheme novo \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/novo-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            build
+
+      - name: Verify and package IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find "$RUNNER_TEMP/novo-derived/Build/Products/Release-iphoneos" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          test -n "$app_path"
+          bundle_path="$(find "$app_path" -name 'main.jsbundle' -type f -print -quit)"
+          test -n "$bundle_path"
+          grep -aFq "$EXPO_PUBLIC_API_URL" "$bundle_path"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" release-assets
+          cp -R "$app_path" "$RUNNER_TEMP/ipa/Payload/"
+          (
+            cd "$RUNNER_TEMP/ipa"
+            /usr/bin/zip -qry "$GITHUB_WORKSPACE/release-assets/novo-${NOVO_BUILD_ENV}.ipa" Payload
+          )
+          shasum -a 256 "release-assets/novo-${NOVO_BUILD_ENV}.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-${{ matrix.environment }}
+          path: release-assets/novo-${{ matrix.environment }}.ipa
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - android
+      - ios
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Download mobile binaries
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Validate release contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            novo-development.apk \
+            novo-development.ipa \
+            novo-production.apk \
+            novo-production.ipa
+          do
+            test -s "release-assets/$file"
+          done
+          ls -lh release-assets
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="$REQUESTED_TAG"
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must look like v1.2.3 or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes="Four device builds from ${GITHUB_SHA}: development routes to https://novodev.tancheetiong.com/api; production routes to https://novo.tancheetiong.com/api. Android uses the generated local install signature. Both IPA files are unsigned for SideStore re-signing."
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "novo mobile $RELEASE_TAG" \
+              --notes "$notes"
+          fi

@@ -1,4 +1,5 @@
-import { closeDatabase, databasePath, initializeDatabase, PersistedCollections, resetDatabase } from './database.js';
+import { closeDatabase, databaseTarget, initializeDatabase, PersistedCollections, resetDatabase } from './database.js';
+import { randomBytes, scryptSync } from 'node:crypto';
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
 type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; sourceAccessoryId?: AccessoryId; sourceAccessoryName?: string };
@@ -58,6 +59,17 @@ const members: DemoMember[] = [
 ];
 
 const users = new Map(members.map((member) => [member.email, member]));
+const demoPassword = process.env.NOVO_DEMO_PASSWORD || 'novo2026';
+const credential = (email: string) => {
+  const salt = randomBytes(16).toString('hex');
+  return { email, salt, passwordHash: scryptSync(demoPassword, salt, 64).toString('hex') };
+};
+const credentials = new Map([
+  'amira.tan@demo.novo.sg',
+  'organizer@demo.novo.sg',
+  'staff@demo.novo.sg',
+  'admin@demo.novo.sg',
+].map((email) => [email, credential(email)]));
 const portalAccounts = new Map<string, unknown>([
   ...members.map((member) => [member.id, { id: member.id, name: member.name, email: member.email, role: 'member', status: 'active' }] as [string, unknown]),
   ['admin_nadia', { id: 'admin_nadia', name: 'Nadia Lim', email: 'admin@demo.novo.sg', role: 'admin', status: 'active' }],
@@ -88,9 +100,9 @@ const marketItems = new Map<string, unknown>([
 ]);
 
 const submissions = new Map<string, unknown>([
-  ['sub_devan', { id: 'sub_devan', userId: 'member_devan', task: 'Sort a shared recycling point', note: 'Separated cans, bottles, and clean paper at our block recycling corner.', photoDataUrl: evidence('Sorted recycling point', '#8bd3c1'), status: 'pending', points: null, aiConfidence: 0.72, aiLabel: 'sorted recyclable containers', createdAt: iso(0, 8, 35), rewardApplied: false }],
-  ['sub_amira', { id: 'sub_amira', userId: 'member_amira', task: 'Bring a reusable lunch kit', note: 'Used my own container and cutlery for lunch instead of disposables.', photoDataUrl: evidence('Reusable lunch kit', '#f4d06f'), status: 'approved', points: 50, aiConfidence: 0.94, aiLabel: 'reusable food container', createdAt: iso(-1, 12, 20), rewardApplied: true }],
-  ['sub_meilin', { id: 'sub_meilin', userId: 'member_meilin', task: 'Return drink containers', note: 'Returned eligible containers after our weekend picnic.', photoDataUrl: evidence('Container return', '#8ab6f9'), status: 'changes_requested', points: null, aiConfidence: 0.41, aiLabel: 'containers partially visible', createdAt: iso(-2, 17, 10), rewardApplied: false }],
+  ['sub_devan', { id: 'sub_devan', userId: 'member_devan', task: 'Sort a shared recycling point', note: 'Separated cans, bottles, and clean paper at our block recycling corner.', photoDataUrl: evidence('Sorted recycling point', '#8bd3c1'), status: 'pending', points: null, aiConfidence: 0.72, aiLabel: 'bottle', aiAccepted: false, aiDetections: [{ label: 'bottle', confidence: 0.72 }, { label: 'cup', confidence: 0.46 }], aiProcessingMs: 91.4, aiSummary: 'The image contains recyclable containers, but the evidence is not clear enough for automatic approval.', aiDecisionReason: 'Relevant objects were detected below the 80% automatic approval threshold.', aiModel: 'yolov8n.pt', createdAt: iso(0, 8, 35), rewardApplied: false }],
+  ['sub_amira', { id: 'sub_amira', userId: 'member_amira', task: 'Bring a reusable lunch kit', note: 'Used my own container and cutlery for lunch instead of disposables.', photoDataUrl: evidence('Reusable lunch kit', '#f4d06f'), status: 'approved', points: 50, aiConfidence: 0.94, aiLabel: 'cup', aiAccepted: true, aiDetections: [{ label: 'cup', confidence: 0.94 }, { label: 'bowl', confidence: 0.81 }], aiProcessingMs: 76.8, aiSummary: 'Reusable food containers are clearly visible and match the submitted task.', aiDecisionReason: 'Task-relevant objects were detected above the 80% automatic approval threshold.', aiModel: 'yolov8n.pt', createdAt: iso(-1, 12, 20), rewardApplied: true }],
+  ['sub_meilin', { id: 'sub_meilin', userId: 'member_meilin', task: 'Return drink containers', note: 'Returned eligible containers after our weekend picnic.', photoDataUrl: evidence('Container return', '#8ab6f9'), status: 'changes_requested', points: null, aiConfidence: 0.41, aiLabel: 'bottle', aiAccepted: false, aiDetections: [{ label: 'bottle', confidence: 0.41 }], aiProcessingMs: 88.1, aiSummary: 'A possible drink container is visible, though the scene does not clearly show a return point.', aiDecisionReason: 'The detection confidence is below the automatic approval threshold.', aiModel: 'yolov8n.pt', createdAt: iso(-2, 17, 10), rewardApplied: false }],
 ]);
 
 const nfcTags = new Map<string, unknown>([
@@ -109,13 +121,13 @@ const donations = new Map<string, unknown>([
   ['don_devan', { id: 'don_devan', userId: 'member_devan', causeId: 'food-rescue', causeName: 'Neighbourhood Food Rescue', points: 200, createdAt: iso(-7, 18) }],
 ]);
 
-const collections = { users, portalAccounts, portalEvents, marketItems, submissions, fulfillmentOrders, donations, nfcTags, accessoryQrTags } as unknown as PersistedCollections;
+const collections = { users, portalAccounts, portalEvents, marketItems, submissions, fulfillmentOrders, donations, nfcTags, accessoryQrTags, credentials } as unknown as PersistedCollections;
 
 try {
   await resetDatabase();
   await initializeDatabase(collections);
   await closeDatabase();
-  console.log(`Created novo demo database at ${databasePath}`);
+  console.log(`Created novo demo database at ${databaseTarget}`);
   console.log('Demo password: novo2026');
   console.log('Member: amira.tan@demo.novo.sg (10,000 spendable leaves)');
   console.log('Organizer: organizer@demo.novo.sg');

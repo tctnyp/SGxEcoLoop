@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
@@ -60,6 +60,7 @@ type PortalEvent = {
 };
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: 'active' | 'review' | 'suspended' };
 type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean };
+type AiDetection = { label: string; confidence: number; box?: { x1: number; y1: number; x2: number; y2: number } };
 type Submission = {
   id: string;
   userId: string;
@@ -70,6 +71,12 @@ type Submission = {
   points: number | null;
   aiConfidence: number | null;
   aiLabel: string | null;
+  aiAccepted: boolean;
+  aiDetections: AiDetection[];
+  aiProcessingMs: number | null;
+  aiSummary: string | null;
+  aiDecisionReason: string | null;
+  aiModel: string | null;
   createdAt: string;
   rewardApplied: boolean;
   photoFingerprint: string;
@@ -88,6 +95,7 @@ type AccessoryQrTag = { id: string; token: string; accessoryId: AccessoryId; lab
 type WebSession = { token: string; accountId: string; role: PortalAccount['role']; expiresAt: number };
 type MobileSession = { token: string; userId: string; expiresAt: number };
 type MobileHandoff = { token: string; userId: string; expiresAt: number; consumed: boolean };
+type Credential = { email: string; salt: string; passwordHash: string };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -100,6 +108,7 @@ const fulfillmentOrders = new Map<string, FulfillmentOrder>();
 const donations = new Map<string, Donation>();
 const nfcTags = new Map<string, NfcTag>();
 const accessoryQrTags = new Map<string, AccessoryQrTag>();
+const credentials = new Map<string, Credential>();
 
 const persistedCollections = {
   users,
@@ -114,7 +123,41 @@ const persistedCollections = {
   webSessions,
   mobileSessions,
   mobileHandoffs,
+  credentials,
 } as unknown as PersistedCollections;
+
+function passwordMatches(email: string, password: string) {
+  const credential = credentials.get(email.toLowerCase());
+  if (!credential) return true;
+  try {
+    const expected = Buffer.from(credential.passwordHash, 'hex');
+    const actual = scryptSync(password, credential.salt, expected.length);
+    return expected.length > 0 && timingSafeEqual(expected, actual);
+  } catch {
+    return false;
+  }
+}
+
+function createCredential(email: string, password: string): Credential {
+  const salt = randomBytes(16).toString('hex');
+  return { email: email.toLowerCase(), salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
+}
+
+function accountView(account: PortalAccount) {
+  const member = findUser(account.id);
+  return {
+    ...account,
+    passwordSet: credentials.has(account.email.toLowerCase()),
+    member: member ? {
+      points: member.points,
+      lifetimePoints: member.lifetimePoints,
+      streak: member.streak,
+      mascotName: member.mascotName,
+      wristbandPaired: member.wristbandPaired,
+      wristbandColor: member.wristbandColor,
+    } : null,
+  };
+}
 
 function coordinatesForSingaporeLocation(location: string) {
   const normalized = location.toLowerCase();
@@ -144,17 +187,17 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
   let changed = false;
   const now = Date.now();
   for (const [token, session] of webSessions) {
-    if (session.expiresAt > now) continue;
+    if (session.expiresAt > now && portalAccounts.has(session.accountId)) continue;
     webSessions.delete(token);
     changed = true;
   }
   for (const [token, session] of mobileSessions) {
-    if (session.expiresAt > now) continue;
+    if (session.expiresAt > now && findUser(session.userId)) continue;
     mobileSessions.delete(token);
     changed = true;
   }
   for (const [token, handoff] of mobileHandoffs) {
-    if (handoff.expiresAt > now && !handoff.consumed) continue;
+    if (handoff.expiresAt > now && !handoff.consumed && findUser(handoff.userId)) continue;
     mobileHandoffs.delete(token);
     changed = true;
   }
@@ -170,27 +213,55 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
     user.dailyQuests ??= [];
     user.coupons ??= [];
     user.friendIds ??= [];
+    const uniqueFriendIds = [...new Set(user.friendIds)].filter((friendId) => friendId !== user.id);
+    if (uniqueFriendIds.length !== user.friendIds.length) { user.friendIds = uniqueFriendIds; changed = true; }
     user.notificationPreferences ??= { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true };
   }
-  for (const submission of submissions.values()) submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
-  for (const submission of submissions.values()) {
+  const validUserIds = new Set([...users.values()].map((user) => user.id));
+  for (const user of users.values()) {
+    const validFriendIds = user.friendIds.filter((friendId) => validUserIds.has(friendId));
+    if (validFriendIds.length !== user.friendIds.length) { user.friendIds = validFriendIds; changed = true; }
+  }
+  for (const [submissionId, submission] of submissions) {
+    if (!validUserIds.has(submission.userId)) { submissions.delete(submissionId); changed = true; continue; }
+    submission.rewardApplied ??= submission.status === 'approved' && Boolean(submission.points);
+    submission.aiAccepted ??= submission.status === 'approved' && submission.aiConfidence !== null && submission.aiConfidence >= 0.8;
+    submission.aiDetections ??= [];
+    submission.aiProcessingMs ??= null;
+    submission.aiSummary ??= null;
+    submission.aiDecisionReason ??= null;
+    submission.aiModel ??= null;
     submission.photoFingerprint ??= fingerprintPhoto(submission.photoDataUrl);
     submission.photoEmbedding ??= null;
   }
-  for (const order of fulfillmentOrders.values()) order.status ??= 'confirmed';
+  for (const [orderId, order] of fulfillmentOrders) {
+    if (!validUserIds.has(order.userId)) { fulfillmentOrders.delete(orderId); changed = true; continue; }
+    order.status ??= 'confirmed';
+  }
+  for (const [donationId, donation] of donations) if (!validUserIds.has(donation.userId)) { donations.delete(donationId); changed = true; }
   for (const tag of nfcTags.values()) {
     tag.wristbandColor ??= 'snowy-white';
     tag.mascotType ??= WRISTBAND_MASCOTS[tag.wristbandColor];
+    if (tag.pairedUserId && !validUserIds.has(tag.pairedUserId)) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; changed = true; }
   }
-  for (const tag of accessoryQrTags.values()) tag.orderId ??= null;
+  for (const tag of accessoryQrTags.values()) {
+    tag.orderId ??= null;
+    if (tag.pairedUserId && !validUserIds.has(tag.pairedUserId)) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; changed = true; }
+  }
   for (const event of portalEvents.values()) {
     event.checkedInUserIds ??= [];
+    const attendees = [...new Set(event.attendees)].filter((userId) => validUserIds.has(userId));
+    const checkedInUserIds = [...new Set(event.checkedInUserIds)].filter((userId) => attendees.includes(userId));
+    if (attendees.length !== event.attendees.length) { event.attendees = attendees; changed = true; }
+    if (checkedInUserIds.length !== event.checkedInUserIds.length) { event.checkedInUserIds = checkedInUserIds; changed = true; }
     if (typeof event.latitude === 'number' && typeof event.longitude === 'number') continue;
     const coordinates = coordinatesForSingaporeLocation(event.location);
     event.latitude = coordinates.latitude;
     event.longitude = coordinates.longitude;
     changed = true;
   }
+  const accountEmails = new Set([...portalAccounts.values()].map((account) => account.email.toLowerCase()));
+  for (const [email] of credentials) if (!accountEmails.has(email.toLowerCase())) { credentials.delete(email); changed = true; }
   const configuredRoles: Array<[string | undefined, PortalRole]> = [
     [process.env.NOVO_ORGANIZER_EMAIL, 'organizer'],
     [process.env.NOVO_STAFF_EMAIL, 'staff'],
@@ -244,8 +315,28 @@ const eventSchema = z.object({
   longitude: z.number().min(-180).max(180).nullable().optional(),
 });
 const checkInSchema = z.object({ tagToken: z.string().trim().min(24).max(200) });
-const accountPatchSchema = z.object({ name: z.string().trim().min(1).max(80).optional(), email: z.string().email().optional(), role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(), status: z.enum(['active', 'review', 'suspended']).optional() }).refine((value) => Object.keys(value).length > 0, 'Provide at least one account change.');
-const accountCreateSchema = z.object({ name: z.string().trim().min(1).max(80), email: z.string().email(), role: z.enum(['member', 'organizer', 'staff', 'admin']), status: z.enum(['active', 'review', 'suspended']).default('active') });
+const accountPatchSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  email: z.string().email().optional(),
+  role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(),
+  status: z.enum(['active', 'review', 'suspended']).optional(),
+  password: z.string().min(6).max(128).optional(),
+  points: z.number().int().min(0).max(10_000_000).optional(),
+  lifetimePoints: z.number().int().min(0).max(100_000_000).optional(),
+  streak: z.number().int().min(0).max(100_000).optional(),
+  mascotName: z.string().trim().min(1).max(30).optional(),
+}).refine((value) => Object.keys(value).length > 0, 'Provide at least one account change.');
+const accountCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  email: z.string().email(),
+  role: z.enum(['member', 'organizer', 'staff', 'admin']),
+  status: z.enum(['active', 'review', 'suspended']).default('active'),
+  password: z.string().min(6).max(128),
+  points: z.number().int().min(0).max(10_000_000).default(0),
+  lifetimePoints: z.number().int().min(0).max(100_000_000).default(0),
+  streak: z.number().int().min(0).max(100_000).default(0),
+  mascotName: z.string().trim().min(1).max(30).default('Nova'),
+});
 const marketSchema = z.object({ name: z.string().trim().min(2).max(80), category: z.enum(['accessory', 'charity', 'coupon']), price: z.number().int().min(0).max(100000), stock: z.number().int().min(0).nullable(), active: z.boolean().default(true) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'tagged', 'dispatched', 'delivered', 'cancelled']) });
 const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000) });
@@ -393,7 +484,8 @@ function findAccessoryQrTag(tagToken: string) {
 }
 
 async function analyzeSubmission(photoDataUrl: string, description: string) {
-  if (!process.env.YOLO_SERVICE_URL) return { confidence: null as number | null, label: null as string | null, embedding: null as number[] | null, accepted: false };
+  const unavailable = { confidence: null as number | null, label: null as string | null, embedding: null as number[] | null, accepted: false, detections: [] as AiDetection[], processingMs: null as number | null, summary: null as string | null, decisionReason: null as string | null, model: null as string | null };
+  if (!process.env.YOLO_SERVICE_URL) return unavailable;
   try {
     const response = await fetch(process.env.YOLO_SERVICE_URL, {
       method: 'POST',
@@ -401,13 +493,30 @@ async function analyzeSubmission(photoDataUrl: string, description: string) {
       body: JSON.stringify({ image: photoDataUrl, description }),
       signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok) return { confidence: null, label: null, embedding: null, accepted: false };
-    const result = await response.json() as { confidence?: number; label?: string; embedding?: number[]; accepted?: boolean };
+    if (!response.ok) return unavailable;
+    const result = await response.json() as { confidence?: number; label?: string; embedding?: number[]; accepted?: boolean; detections?: Array<{ label?: string; confidence?: number; box?: { x1?: number; y1?: number; x2?: number; y2?: number } }>; processing_ms?: number; summary?: string; decision_reason?: string; model?: string };
     const confidence = typeof result.confidence === 'number' ? Math.max(0, Math.min(1, result.confidence)) : null;
     const embedding = Array.isArray(result.embedding) && result.embedding.length <= 4096 && result.embedding.every(Number.isFinite) ? result.embedding : null;
-    return { confidence, label: result.label?.slice(0, 100) ?? null, embedding, accepted: result.accepted === true && confidence !== null && confidence >= 0.8 };
+    const detections = Array.isArray(result.detections) ? result.detections.flatMap((item): AiDetection[] => {
+      if (typeof item.label !== 'string' || typeof item.confidence !== 'number') return [];
+      const box = item.box && [item.box.x1, item.box.y1, item.box.x2, item.box.y2].every((value) => typeof value === 'number')
+        ? { x1: item.box.x1!, y1: item.box.y1!, x2: item.box.x2!, y2: item.box.y2! }
+        : undefined;
+      return [{ label: item.label.slice(0, 100), confidence: Math.max(0, Math.min(1, item.confidence)), ...(box ? { box } : {}) }];
+    }).slice(0, 20) : [];
+    return {
+      confidence,
+      label: result.label?.slice(0, 100) ?? null,
+      embedding,
+      accepted: result.accepted === true && confidence !== null && confidence >= 0.8,
+      detections,
+      processingMs: typeof result.processing_ms === 'number' && Number.isFinite(result.processing_ms) ? Math.max(0, result.processing_ms) : null,
+      summary: result.summary?.slice(0, 500) ?? null,
+      decisionReason: result.decision_reason?.slice(0, 500) ?? null,
+      model: result.model?.slice(0, 100) ?? null,
+    };
   } catch {
-    return { confidence: null, label: null, embedding: null, accepted: false };
+    return unavailable;
   }
 }
 
@@ -517,9 +626,12 @@ app.post('/api/auth/email-status', (request, response, next) => {
 
 app.post('/api/auth/sign-in', async (request, response, next) => {
   try {
-    const { email } = signInSchema.parse(request.body);
+    const { email, password } = signInSchema.parse(request.body);
     const existing = users.get(email.toLowerCase());
     if (!existing) return response.json({ isNewUser: true, draft: { name: '', email: email.toLowerCase() } });
+    const account = findPortalAccountByEmail(email);
+    if (account?.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
+    if (!passwordMatches(email, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const token = createMobileSession(existing.id);
     await persistDatabase(persistedCollections);
     response.json({ isNewUser: false, token, user: existing });
@@ -530,7 +642,7 @@ app.post('/api/auth/sign-in', async (request, response, next) => {
 
 app.post('/api/auth/web-sign-in', async (request, response, next) => {
   try {
-    const { email } = signInSchema.parse(request.body);
+    const { email, password } = signInSchema.parse(request.body);
     const normalizedEmail = email.toLowerCase();
     let account = findPortalAccountByEmail(normalizedEmail);
     let user = users.get(normalizedEmail);
@@ -538,6 +650,7 @@ app.post('/api/auth/web-sign-in', async (request, response, next) => {
     if (!account) return response.status(401).json({ message: 'No account was found. Create your account in the novo app first.' });
 
     if (account.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
+    if (!passwordMatches(normalizedEmail, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const session = createWebSession(account);
     const privileged = account.role !== 'member';
     const handoffToken = !privileged && user ? createMobileHandoff(user.id) : undefined;
@@ -798,7 +911,7 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
     const input = customTaskSchema.parse(request.body);
     const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
     if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
-    const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    const analysis = await analyzeSubmission(input.photoDataUrl, `${input.title}. Member evidence: ${input.description}`);
     if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? 50 : null;
     const submission: Submission = {
@@ -811,6 +924,12 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
       points: awardedPoints,
       aiConfidence: analysis.confidence,
       aiLabel: analysis.label,
+      aiAccepted: analysis.accepted,
+      aiDetections: analysis.detections,
+      aiProcessingMs: analysis.processingMs,
+      aiSummary: analysis.summary,
+      aiDecisionReason: analysis.decisionReason,
+      aiModel: analysis.model,
       createdAt: new Date().toISOString(),
       rewardApplied: Boolean(awardedPoints),
       photoFingerprint,
@@ -838,10 +957,10 @@ app.post('/api/member/tasks/:questId/submit', async (request, response, next) =>
     const input = customTaskSchema.omit({ title: true }).parse(request.body);
     const photoFingerprint = fingerprintPhoto(input.photoDataUrl);
     if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
-    const analysis = await analyzeSubmission(input.photoDataUrl, input.description);
+    const analysis = await analyzeSubmission(input.photoDataUrl, `${quest.title}. ${quest.description} Member evidence: ${input.description}`);
     if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
     const awardedPoints = analysis.accepted ? quest.points : null;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, aiAccepted: analysis.accepted, aiDetections: analysis.detections, aiProcessingMs: analysis.processingMs, aiSummary: analysis.summary, aiDecisionReason: analysis.decisionReason, aiModel: analysis.model, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
     if (awardedPoints) {
       user.points += awardedPoints;
       user.lifetimePoints += awardedPoints;
@@ -866,7 +985,7 @@ app.post('/api/member/tasks/:questId/quiz', (request, response, next) => {
     quest.completed = true;
     user.points += quest.points;
     user.lifetimePoints += quest.points;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', aiAccepted: true, aiDetections: [], aiProcessingMs: null, aiSummary: 'The member completed the knowledge check successfully.', aiDecisionReason: 'The submitted answer matched the correct response.', aiModel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
     submissions.set(submission.id, submission);
     response.status(201).json({ submission: memberSubmission(submission), user, automated: true });
   } catch (error) {
@@ -1248,21 +1367,26 @@ app.delete('/api/portal/market/:itemId', requirePortalRole('staff', 'admin'), (r
 });
 
 app.get('/api/portal/accounts', requirePortalRole('admin'), (_request, response) => {
-  response.json({ accounts: [...portalAccounts.values()] });
+  const accounts = [...portalAccounts.values()]
+    .map(accountView)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  response.json({ accounts });
 });
 
 app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response, next) => {
   try {
     const input = accountCreateSchema.parse(request.body);
     if (findPortalAccountByEmail(input.email)) return response.status(409).json({ message: 'An account with this email already exists.' });
-    const account: PortalAccount = { id: `account_${crypto.randomUUID()}`, ...input, email: input.email.toLowerCase() };
+    const { password, points, lifetimePoints, streak, mascotName, ...accountInput } = input;
+    const account: PortalAccount = { id: `account_${crypto.randomUUID()}`, ...accountInput, email: input.email.toLowerCase() };
     portalAccounts.set(account.id, account);
+    credentials.set(account.email, createCredential(account.email, password));
     if (account.role === 'member') {
       users.set(account.email, {
         id: account.id,
         name: account.name,
         email: account.email,
-        mascotName: 'Nova',
+        mascotName,
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',
         wristbandPaired: false,
@@ -1271,16 +1395,16 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
         equippedAccessories: [],
         friendIds: [],
         notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
-        streak: 0,
-        points: 0,
-        lifetimePoints: 0,
+        streak,
+        points,
+        lifetimePoints: Math.max(points, lifetimePoints),
         lastWristbandTapAt: null,
         questBoardDate: null,
         dailyQuests: [],
         coupons: [],
       });
     }
-    response.status(201).json({ account });
+    response.status(201).json({ account: accountView(account) });
   } catch (error) { next(error); }
 });
 
@@ -1290,19 +1414,63 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
     const account = portalAccounts.get(routeParam(request.params.accountId));
     if (!account) return response.status(404).json({ message: 'Account not found.' });
     if (changes.email && changes.email.toLowerCase() !== account.email.toLowerCase() && findPortalAccountByEmail(changes.email)) return response.status(409).json({ message: 'An account with this email already exists.' });
-    const member = findUser(account.id);
-    if (member) {
-      const previousEmail = member.email.toLowerCase();
-      if (changes.name) member.name = changes.name;
-      if (changes.email) {
-        member.email = changes.email.toLowerCase();
-        users.delete(previousEmail);
-        users.set(member.email, member);
-      }
+    const activeSession = sessionFromRequest(request);
+    if (activeSession?.accountId === account.id && ((changes.role && changes.role !== 'admin') || (changes.status && changes.status !== 'active'))) {
+      return response.status(409).json({ message: 'You cannot remove access from the administrator account currently in use.' });
     }
-    Object.assign(account, changes);
+
+    const previousEmail = account.email.toLowerCase();
+    const { password, points, lifetimePoints, streak, mascotName, ...accountChanges } = changes;
+    Object.assign(account, accountChanges);
     account.email = account.email.toLowerCase();
-    response.json({ account });
+    let member = findUser(account.id);
+    if (account.role === 'member' && !member) {
+      member = {
+        id: account.id,
+        name: account.name,
+        email: account.email,
+        mascotName: mascotName ?? 'Nova',
+        mascotType: 'polar-bear',
+        wristbandColor: 'snowy-white',
+        wristbandPaired: false,
+        wristbandPickupLocation: null,
+        accessories: [],
+        equippedAccessories: [],
+        friendIds: [],
+        notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
+        streak: streak ?? 0,
+        points: points ?? 0,
+        lifetimePoints: Math.max(points ?? 0, lifetimePoints ?? 0),
+        lastWristbandTapAt: null,
+        questBoardDate: null,
+        dailyQuests: [],
+        coupons: [],
+      };
+      users.set(account.email, member);
+    } else if (member) {
+      users.delete(member.email.toLowerCase());
+      member.name = account.name;
+      member.email = account.email;
+      if (points !== undefined) member.points = points;
+      member.lifetimePoints = Math.max(member.points, lifetimePoints ?? member.lifetimePoints);
+      if (streak !== undefined) member.streak = streak;
+      if (mascotName !== undefined) member.mascotName = mascotName;
+      users.set(member.email, member);
+    }
+
+    const existingCredential = credentials.get(previousEmail);
+    if (previousEmail !== account.email) {
+      credentials.delete(previousEmail);
+      if (existingCredential) credentials.set(account.email, { ...existingCredential, email: account.email });
+    }
+    if (password) credentials.set(account.email, createCredential(account.email, password));
+
+    if (password || changes.role || changes.status) {
+      for (const [token, session] of webSessions) if (session.accountId === account.id && token !== request.header('authorization')?.replace(/^Bearer /, '')) webSessions.delete(token);
+      for (const [token, session] of mobileSessions) if (session.userId === account.id) mobileSessions.delete(token);
+      for (const [token, handoff] of mobileHandoffs) if (handoff.userId === account.id) mobileHandoffs.delete(token);
+    }
+    response.json({ account: accountView(account) });
   } catch (error) {
     next(error);
   }
@@ -1316,9 +1484,23 @@ app.delete('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reque
   if (!account) return response.status(404).json({ message: 'Account not found.' });
   portalAccounts.delete(accountId);
   const member = findUser(accountId);
-  if (member) users.delete(member.email.toLowerCase());
+  if (member) {
+    users.delete(member.email.toLowerCase());
+    for (const other of users.values()) other.friendIds = other.friendIds.filter((friendId) => friendId !== accountId);
+    for (const [id, submission] of submissions) if (submission.userId === accountId) submissions.delete(id);
+    for (const [id, order] of fulfillmentOrders) if (order.userId === accountId) fulfillmentOrders.delete(id);
+    for (const [id, donation] of donations) if (donation.userId === accountId) donations.delete(id);
+    for (const event of portalEvents.values()) {
+      event.attendees = event.attendees.filter((userId) => userId !== accountId);
+      event.checkedInUserIds = event.checkedInUserIds.filter((userId) => userId !== accountId);
+    }
+    for (const tag of nfcTags.values()) if (tag.pairedUserId === accountId) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; }
+    for (const tag of accessoryQrTags.values()) if (tag.pairedUserId === accountId) { tag.pairedUserId = null; tag.pairedAt = null; tag.status = 'ready'; }
+  }
+  credentials.delete(account.email.toLowerCase());
   for (const [token, value] of webSessions) if (value.accountId === accountId) webSessions.delete(token);
   for (const [token, value] of mobileSessions) if (value.userId === accountId) mobileSessions.delete(token);
+  for (const [token, value] of mobileHandoffs) if (value.userId === accountId) mobileHandoffs.delete(token);
   response.status(204).send();
 });
 
