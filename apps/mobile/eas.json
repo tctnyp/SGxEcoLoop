@@ -6,7 +6,8 @@
     "development-android": {
       "distribution": "internal",
       "env": {
-        "NOVO_BUILD_ENV": "development"
+        "NOVO_BUILD_ENV": "development",
+        "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
       },
       "android": {
         "buildType": "apk"
@@ -15,7 +16,8 @@
     "development-ios": {
       "distribution": "internal",
       "env": {
-        "NOVO_BUILD_ENV": "development"
+        "NOVO_BUILD_ENV": "development",
+        "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
       },
       "ios": {
         "simulator": false

@@ -50,13 +50,10 @@ Open `http://localhost:4000`. Port 8081 is the Expo browser preview; port 4000 i
 Choose the target directly in the command; there is no machine-specific configuration file to maintain:
 
 ```powershell
-# Keep this running in its own terminal while testing the APK
-npm run start:server
-
-# Android beta testing on the same Wi-Fi as this computer
+# Android development build against novodev.tancheetiong.com
 npm run build:android:development
 
-# iPhone beta testing through EAS internal distribution
+# iPhone development build
 npm run build:ios:development
 
 # Build both targets (local Android, then cloud iOS)
@@ -69,12 +66,11 @@ npm run build:ios:production
 
 The older `build:apk:*` commands remain as Android aliases. The general command accepts `-Platform Android`, `-Platform iOS`, or `-Platform All`; development is the default environment and Android is the default platform.
 
-- **Development** discovers the current active private Wi-Fi/Ethernet IPv4 address at build time and embeds `http://CURRENT-IP:4000/api`. The phone and computer must be on the same network. Keep `npm run start:server` running while building and using the APK. Before Gradle starts, the script now verifies both the port listener and `CURRENT-IP:4000/api/health`; it refuses to build an APK with an unreachable development endpoint. The artifact is `artifacts/novo-development.apk`.
+- **Development** always embeds `https://novodev.tancheetiong.com/api`. The Android artifact is `artifacts/novo-development.apk`.
 - **Production** always embeds `https://novo.tancheetiong.com/api`. Auto mode starts a signed EAS internal-distribution build using the `production-apk` profile, making it suitable for closed testing and direct installation.
-- **iOS** uses an EAS cloud internal-distribution build from Windows because an installable iOS package requires macOS/Xcode and Apple signing. EAS may ask for an Expo login, Apple Developer credentials, and registration of test-device UDIDs. The resulting install link and IPA are supplied by EAS.
+- **iOS** local release packages are built by the Mobile Release workflow on a macOS runner. The IPA files are unsigned so SideStore can re-sign them.
 - Preview a resolved target without building using `npm run build:mobile:development -- -Platform iOS -ShowConfig` or `npm run build:mobile:production -- -Platform All -ShowConfig`.
-- Override unusual development networks with `-ApiUrl http://YOUR-IP:4000/api`. Production overrides must use HTTPS.
-- `-SkipServerCheck` is available only for deliberate offline development builds; the API must still be running when the APK is used.
+- API overrides must use HTTPS so device builds cannot accidentally ship with local or cleartext routes.
 - If a physical Android phone is connected through ADB, the script also checks the selected API URL from the phone itself. Run `npm run build:apk -- development -VerifyOnly` to perform all computer and device connectivity checks without building an APK.
 - Force a builder with `-Mode Local` or `-Mode Cloud`. Android development defaults to the local toolchain; iOS always requires cloud building on this Windows workflow. A forced local production Android build creates `artifacts/novo-production.apk`, but should be treated as a device smoke-test build unless you have separately configured production signing.
 - Local mode requires Android Studio, the Android SDK, and JDK 17–23. If needed, pass `-JavaHome 'C:\path\to\jdk-17'`.
@@ -84,6 +80,15 @@ The older `build:apk:*` commands remain as Android aliases. The general command 
 For Google Play production, use the existing EAS `production` profile to create an Android App Bundle. The production APK profile is intended for closed testing and direct installation.
 
 Expo Go cannot load the NFC native module. Rebuild the APK whenever native dependencies or Expo config plugins change.
+
+### GitHub mobile releases
+
+Major changes must run `.github/workflows/mobile-release.yml`. Push a semantic version tag such as `v1.0.6`, or run the workflow manually with that tag. A successful run publishes one GitHub release containing exactly four device packages:
+
+- `novo-development.apk` and `novo-development.ipa` use `https://novodev.tancheetiong.com/api`.
+- `novo-production.apk` and `novo-production.ipa` use `https://novo.tancheetiong.com/api`.
+
+The IPA files are intentionally unsigned for SideStore. Android packages use Expo's generated local install signature because Android rejects completely unsigned APKs; no production signing credential is used.
 
 If an installed build reports a missing native Expo module, uninstall the old APK and install a newly generated one. JavaScript bundling alone cannot add a native Android module to an existing binary.
 

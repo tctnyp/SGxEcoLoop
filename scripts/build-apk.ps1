@@ -22,6 +22,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $repoRoot 'apps\mobile'
 $artifactRoot = Join-Path $repoRoot 'artifacts'
+$developmentApiUrl = 'https://novodev.tancheetiong.com/api'
 $productionApiUrl = 'https://novo.tancheetiong.com/api'
 
 function Get-PrivateAddressRank([string]$Address) {
@@ -124,8 +125,7 @@ if (-not $ApiUrl) {
   if ($Environment -eq 'Production') {
     $ApiUrl = $productionApiUrl
   } else {
-    $detectedNetwork = Get-CurrentLanAddress
-    $ApiUrl = "http://$($detectedNetwork.Address):$ServerPort/api"
+    $ApiUrl = $developmentApiUrl
   }
 }
 
@@ -133,8 +133,8 @@ $ApiUrl = $ApiUrl.TrimEnd('/')
 if ($ApiUrl -notmatch '^https?://[^\s]+/api$') {
   throw "Invalid API URL '$ApiUrl'. Expected an HTTP(S) URL ending in /api."
 }
-if ($Environment -eq 'Production' -and $ApiUrl -notmatch '^https://') {
-  throw 'Production builds require an HTTPS API URL.'
+if ($ApiUrl -notmatch '^https://') {
+  throw 'Device builds require an HTTPS API URL.'
 }
 
 $env:NOVO_BUILD_ENV = $environmentName
@@ -161,7 +161,7 @@ if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interfa
 if ($ShowConfig) { exit 0 }
 
 $androidSdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
-if ($Environment -eq 'Development' -and -not $SkipServerCheck) {
+if ($Environment -eq 'Development' -and -not $SkipServerCheck -and $ApiUrl -ne $developmentApiUrl) {
   $serverIsListening = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
     Where-Object { $_.Port -eq $ServerPort } |
     Select-Object -First 1
