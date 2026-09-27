@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { AccessoryId, AuthResult, Friend, NotificationPreferences, NovoEvent, NovoLocation, TaskSubmission, User } from './types';
+import { AccessoryId, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, TaskSubmission, User, WeeklyCompetition } from './types';
 
 const PRODUCTION_API_URL = 'https://novo.tancheetiong.com/api';
 
@@ -115,7 +115,15 @@ export async function getMemberProfile(token: string): Promise<User> {
 export async function pairWristband(token: string, tagToken: string, pickupLocation: string): Promise<User> {
   const result = await request<{ user: User }>('/member/wristband/pair', {
     method: 'POST',
-    body: JSON.stringify({ tagToken, pickupLocation }),
+    body: JSON.stringify({ tagToken, ...(pickupLocation.trim() ? { pickupLocation: pickupLocation.trim() } : {}) }),
+  }, token);
+  return result.user;
+}
+
+export async function reserveWristbandPickup(token: string, pickupLocation: string): Promise<User> {
+  const result = await request<{ user: User }>('/member/wristband/reserve', {
+    method: 'POST',
+    body: JSON.stringify({ pickupLocation }),
   }, token);
   return result.user;
 }
@@ -150,7 +158,19 @@ export async function addFriend(token: string, friendId: string): Promise<User> 
 }
 
 export async function getMemberTasks(token: string) {
-  return request<{ quests: User['dailyQuests']; events: NovoEvent[]; submissions: TaskSubmission[] }>('/member/tasks', undefined, token);
+  return request<{ quests: User['dailyQuests']; events: NovoEvent[]; submissions: TaskSubmission[]; weeklyCompetition: WeeklyCompetition }>('/member/tasks', undefined, token);
+}
+
+export async function startWeeklyCompetition(token: string) {
+  return request<{ weeklyCompetition: WeeklyCompetition }>('/member/weekly/start', { method: 'POST' }, token);
+}
+
+export async function completeWeeklyCompetition(token: string, answers: number[]) {
+  return request<{ weeklyCompetition: WeeklyCompetition; user: User }>('/member/weekly/complete', { method: 'POST', body: JSON.stringify({ answers }) }, token);
+}
+
+export async function getMemberMarket(token: string) {
+  return request<{ items: MarketItem[] }>('/member/market', undefined, token);
 }
 
 export async function submitCustomTask(token: string, input: { title: string; description: string; photoDataUrl: string }) {

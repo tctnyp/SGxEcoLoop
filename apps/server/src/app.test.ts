@@ -245,6 +245,25 @@ describe('novo API', () => {
     assert.ok(response.body.leaders.some((entry: { name: string }) => entry.name === 'Leaf'));
   });
 
+  it('runs one timed weekly competition and awards speed-ranked leaves', async () => {
+    const member = await createMember('weekly@example.com', 'Fast Leaf');
+    const tasks = await request(app).get('/api/member/tasks').set('authorization', member.authorization);
+    assert.equal(tasks.status, 200);
+    assert.equal(tasks.body.weeklyCompetition.questions.length, 4);
+    assert.equal(tasks.body.weeklyCompetition.entry, null);
+    const started = await request(app).post('/api/member/weekly/start').set('authorization', member.authorization);
+    assert.equal(started.status, 200);
+    assert.ok(started.body.weeklyCompetition.entry.startedAt);
+    const correctById: Record<string, number> = { clean: 0, reuse: 1, bcrs: 2, repair: 2, bag: 0, food: 1, sort: 1, trip: 0 };
+    const answers = started.body.weeklyCompetition.questions.map((question: { id: string }) => correctById[question.id]);
+    const completed = await request(app).post('/api/member/weekly/complete').set('authorization', member.authorization).send({ answers });
+    assert.equal(completed.status, 200);
+    assert.equal(completed.body.weeklyCompetition.entry.rank, 1);
+    assert.equal(completed.body.weeklyCompetition.entry.pointsAwarded, 300);
+    assert.equal(completed.body.user.points, 300);
+    assert.equal((await request(app).post('/api/member/weekly/complete').set('authorization', member.authorization).send({ answers })).status, 409);
+  });
+
   it('allows an organizer to verify completed attendance by paired wristband', async () => {
     const member = await createMember('attendee@example.com');
     const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();

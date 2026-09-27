@@ -15,6 +15,7 @@ import {
   interactWithWristband,
   pairWristband,
   purchaseAccessory,
+  reserveWristbandPickup,
   redeemCoupon,
   getWristbandPickupLocations,
   revokeSession,
@@ -218,6 +219,11 @@ export default function App() {
 
   const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
   const handleLoadWristbandPickupLocations = useCallback(() => getWristbandPickupLocations(requireToken()), []);
+  const handleReserveWristbandPickup = async (pickupLocation: string) => {
+    const updated = await reserveWristbandPickup(requireToken(), pickupLocation);
+    await saveUser(updated);
+    return updated;
+  };
 
   const handleWristbandInteraction = async (tagToken: string) => {
     const updated = await interactWithWristband(requireToken(), tagToken);
@@ -303,7 +309,7 @@ export default function App() {
       <StatusBar style="dark" />
       {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
-      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onPaired={handlePaired} onSignOut={clearSession} />}
+      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
       {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
     </SafeAreaProvider>
   );

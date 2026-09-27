@@ -100,8 +100,9 @@ export const TasksMap = memo(function TasksMap({ locations, events, userLocation
       events.forEach((event) => {
         if (event.latitude === null || event.longitude === null) return;
         const size = Math.min(46, 28 + Math.round(event.points / 45));
-        const marker = document.createElement('span'); marker.className = `novo-event-marker${event.status === 'live' ? ' live' : ''}`; marker.style.width = `${size}px`; marker.style.height = `${size}px`; marker.style.background = event.status === 'live' ? '#E74E43' : '#7058C9'; marker.textContent = String(event.points);
-        marker.setAttribute('aria-label', event.title); marker.addEventListener('click', () => onEventPress?.(event.id));
+        const marker = document.createElement('span'); marker.className = `novo-event-marker${event.status === 'live' ? ' live' : ''}${event.registered ? ' registered' : ''}`; marker.style.width = `${size}px`; marker.style.height = `${size}px`; marker.style.background = event.status === 'live' ? '#E74E43' : '#7058C9'; marker.textContent = event.registered ? '✓' : String(event.points);
+        if (event.registered) marker.style.boxShadow = '0 0 0 4px #DFFB84,0 7px 18px rgba(23,53,42,.32)';
+        marker.setAttribute('aria-label', `${event.title}${event.registered ? ', joined' : ''}`); marker.addEventListener('click', () => onEventPress?.(event.id));
         new maplibregl.Marker({ element: markerShell(marker, size + 18), anchor: 'center' }).setLngLat([event.longitude, event.latitude]).addTo(map!);
       });
     }).catch(() => { if (containerRef.current) containerRef.current.dataset.error = 'true'; });

@@ -57,8 +57,9 @@ function mapDocument(locations: NovoLocation[], events: NovoEvent[], userLocatio
       events.forEach(function (event) {
         if (typeof event.latitude !== 'number' || typeof event.longitude !== 'number') return;
         var size = Math.min(46, 28 + Math.round(event.points / 45)); var live = event.status === 'live';
-        var marker = document.createElement('span'); marker.className = 'event-marker ' + (live ? 'live' : ''); marker.style.width = size + 'px'; marker.style.height = size + 'px'; marker.style.background = live ? '#E74E43' : '#7058C9'; marker.textContent = event.points;
-        marker.setAttribute('aria-label', event.title); marker.addEventListener('click', function () { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'event', eventId: event.id })); });
+        var marker = document.createElement('span'); marker.className = 'event-marker ' + (live ? 'live' : '') + (event.registered ? ' registered' : ''); marker.style.width = size + 'px'; marker.style.height = size + 'px'; marker.style.background = live ? '#E74E43' : '#7058C9'; marker.textContent = event.registered ? '✓' : event.points;
+        if (event.registered) marker.style.boxShadow = '0 0 0 4px #DFFB84,0 7px 18px rgba(23,53,42,.32)';
+        marker.setAttribute('aria-label', event.title + (event.registered ? ', joined' : '')); marker.addEventListener('click', function () { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'event', eventId: event.id })); });
         new maplibregl.Marker({ element: markerShell(marker, size + 18), anchor: 'center' }).setLngLat([event.longitude, event.latitude]).addTo(map);
       });
       map.on('error', function (event) { if (!event || !event.error) return; console.warn(event.error.message || 'Map error'); });

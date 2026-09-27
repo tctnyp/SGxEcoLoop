@@ -59,7 +59,8 @@ type PortalEvent = {
   longitude: number | null;
 };
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: 'active' | 'review' | 'suspended' };
-type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean };
+type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
+type WeeklyEntry = { id: string; weekId: string; userId: string; startedAt: string; completedAt: string | null; elapsedMs: number | null; pointsAwarded: number; correct: boolean };
 type AiDetection = { label: string; confidence: number; box?: { x1: number; y1: number; x2: number; y2: number } };
 type Submission = {
   id: string;
@@ -109,6 +110,7 @@ const donations = new Map<string, Donation>();
 const nfcTags = new Map<string, NfcTag>();
 const accessoryQrTags = new Map<string, AccessoryQrTag>();
 const credentials = new Map<string, Credential>();
+const weeklyEntries = new Map<string, WeeklyEntry>();
 
 const persistedCollections = {
   users,
@@ -124,6 +126,7 @@ const persistedCollections = {
   mobileSessions,
   mobileHandoffs,
   credentials,
+  weeklyEntries,
 } as unknown as PersistedCollections;
 
 function passwordMatches(email: string, password: string) {
@@ -239,6 +242,15 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
     order.status ??= 'confirmed';
   }
   for (const [donationId, donation] of donations) if (!validUserIds.has(donation.userId)) { donations.delete(donationId); changed = true; }
+  for (const [entryId, entry] of weeklyEntries) if (!validUserIds.has(entry.userId)) { weeklyEntries.delete(entryId); changed = true; }
+  for (const item of marketItems.values()) {
+    const legacy = item as MarketItem & { description?: string; imageDataUrl?: string | null; accessoryId?: AccessoryId | null };
+    const needsMigration = legacy.description === undefined || legacy.imageDataUrl === undefined || legacy.accessoryId === undefined;
+    item.description ??= item.category === 'accessory' ? 'A digital accessory made to fit every novo mascot.' : item.category === 'coupon' ? 'Trade leaves for a verified partner reward.' : 'Direct your leaves towards a verified community cause.';
+    item.imageDataUrl ??= null;
+    item.accessoryId ??= item.category === 'accessory' ? inferAccessoryId(item.id, item.name) : null;
+    if (needsMigration) changed = true;
+  }
   for (const tag of nfcTags.values()) {
     tag.wristbandColor ??= 'snowy-white';
     tag.mascotType ??= WRISTBAND_MASCOTS[tag.wristbandColor];
@@ -293,6 +305,7 @@ const onboardingSchema = z.object({
 });
 
 const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200), pickupLocation: z.string().trim().min(3).max(240).optional() });
+const pickupReservationSchema = z.object({ pickupLocation: z.string().trim().min(3).max(240) });
 const wristbandColorSchema = z.enum(['snowy-white', 'charcoal-black', 'sunset-orange', 'tropical-green', 'ocean-blue']);
 const provisionTagSchema = z.object({ label: z.string().trim().min(2).max(80), wristbandColor: wristbandColorSchema.default('snowy-white') });
 const provisionAccessoryTagSchema = z.object({ label: z.string().trim().min(2).max(80), accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']), orderId: z.string().min(1).optional() });
@@ -337,16 +350,26 @@ const accountCreateSchema = z.object({
   streak: z.number().int().min(0).max(100_000).default(0),
   mascotName: z.string().trim().min(1).max(30).default('Nova'),
 });
-const marketSchema = z.object({ name: z.string().trim().min(2).max(80), category: z.enum(['accessory', 'charity', 'coupon']), price: z.number().int().min(0).max(100000), stock: z.number().int().min(0).nullable(), active: z.boolean().default(true) });
+const marketSchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  category: z.enum(['accessory', 'charity', 'coupon']),
+  price: z.number().int().min(0).max(100000),
+  stock: z.number().int().min(0).nullable(),
+  active: z.boolean().default(true),
+  description: z.string().trim().min(10).max(800).default('A verified novo marketplace listing.'),
+  imageDataUrl: z.string().regex(/^data:image\/(jpeg|jpg|png|webp);base64,/).max(6_000_000).nullable().default(null),
+  accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']).nullable().default(null),
+});
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'tagged', 'dispatched', 'delivered', 'cancelled']) });
 const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000) });
 const handoffExchangeSchema = z.object({ handoffToken: z.string().min(10) });
 const memberAccessorySchema = z.object({ accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']) });
 const memberPurchaseSchema = memberAccessorySchema;
-const contributionSchema = z.object({ points: z.number().int().min(100).max(10000), causeId: z.string().trim().min(2).max(60).default('clean-shores'), causeName: z.string().trim().min(2).max(100).default('Singapore Clean Shores') });
+const contributionSchema = z.object({ points: z.number().int().min(1).max(10000), causeId: z.string().trim().min(2).max(100), causeName: z.string().trim().min(2).max(100) });
 const couponSchema = z.object({ offerId: z.string().trim().min(2).max(60), name: z.string().trim().min(2).max(100), points: z.number().int().min(1).max(10000) });
 const quizSubmissionSchema = z.object({ answer: z.string().trim().min(1).max(160) });
 const notificationPreferencesSchema = z.object({ dailyGreeting: z.boolean(), tasks: z.boolean(), events: z.boolean(), friends: z.boolean(), orders: z.boolean() });
+const weeklySubmissionSchema = z.object({ answers: z.array(z.number().int().min(0).max(3)).length(4) });
 
 const questTemplates = [
   { title: 'Build with recyclables', description: 'Show yourself making a useful product from recyclable materials.', points: 45, kind: 'photo' as const },
@@ -403,6 +426,13 @@ const memberRewards: Partial<Record<AccessoryId, number>> = {
   'meadow-socks': 240,
 };
 
+const ACCESSORY_IDS: AccessoryId[] = ['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop'];
+
+function inferAccessoryId(id: string, name: string): AccessoryId | null {
+  const haystack = `${id.replace(/_/g, '-')} ${name.toLowerCase().replace(/\s+/g, '-')}`;
+  return ACCESSORY_IDS.find((accessoryId) => haystack.includes(accessoryId)) ?? null;
+}
+
 const accessoryCodes: Record<string, AccessoryId> = {
   'NOVO-STAR-04': 'bright-star',
   'NOVO-SUNNY-01': 'sunny-cap',
@@ -425,6 +455,60 @@ function singaporeDate(value: Date | string = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(value));
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? '';
   return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+const weeklyChallengeTemplates = [
+  {
+    title: 'Circular sprint',
+    description: 'Four rapid questions about recycling and reuse. Accuracy comes first; the fastest correct finish earns the biggest leaves reward.',
+    questions: [
+      { id: 'clean', prompt: 'Before recycling a drink container, what should you do?', options: ['Empty, rinse and dry it', 'Seal liquid inside', 'Wrap it in a plastic bag', 'Put it with food waste'], answerIndex: 0 },
+      { id: 'reuse', prompt: 'Which choice prevents the most single-use waste?', options: ['Take a new cup', 'Use a refillable bottle', 'Double-bag a purchase', 'Request extra cutlery'], answerIndex: 1 },
+      { id: 'bcrs', prompt: 'What belongs in a beverage-container return system?', options: ['Food scraps', 'Used tissues', 'Eligible empty drink containers', 'Ceramic plates'], answerIndex: 2 },
+      { id: 'repair', prompt: 'A shirt loses one button. What is the most circular first step?', options: ['Throw it away', 'Buy two replacements', 'Repair the button', 'Use a disposable shirt'], answerIndex: 2 },
+    ],
+  },
+  {
+    title: 'Low-waste lightning round',
+    description: 'Race the community through a weekly sustainability knowledge sprint. Correct answers are ranked by completion time.',
+    questions: [
+      { id: 'bag', prompt: 'Which bag is usually best for a repeat grocery trip?', options: ['A bag you already own', 'A new paper bag every time', 'Two plastic bags', 'No bag, then buy one'], answerIndex: 0 },
+      { id: 'food', prompt: 'What is the best first option for edible surplus food?', options: ['Landfill it', 'Keep or redistribute it safely', 'Mix it with plastic', 'Pour it away'], answerIndex: 1 },
+      { id: 'sort', prompt: 'Why should recyclables stay free of food residue?', options: ['To make them heavier', 'To reduce contamination', 'To change their colour', 'To hide labels'], answerIndex: 1 },
+      { id: 'trip', prompt: 'For a short nearby trip, which option has the lowest waste impact?', options: ['Walk with a reusable bag', 'Drive for a disposable cup', 'Order several bags', 'Buy bottled water first'], answerIndex: 0 },
+    ],
+  },
+] as const;
+
+function weeklyChallenge() {
+  const today = singaporeDate();
+  const localNoon = new Date(`${today}T12:00:00+08:00`);
+  const daysSinceMonday = (localNoon.getUTCDay() + 6) % 7;
+  localNoon.setUTCDate(localNoon.getUTCDate() - daysSinceMonday);
+  const weekId = singaporeDate(localNoon);
+  const startsAt = `${weekId}T00:00:00+08:00`;
+  const endsAt = new Date(Date.parse(startsAt) + 7 * 86_400_000).toISOString();
+  const seed = [...weekId].reduce((total, character) => total + character.charCodeAt(0), 0);
+  return { id: `weekly-${weekId}`, weekId, startsAt, endsAt, durationSeconds: 120, ...(weeklyChallengeTemplates[seed % weeklyChallengeTemplates.length] ?? weeklyChallengeTemplates[0]!) };
+}
+
+function weeklyCompetitionView(user: User) {
+  const challenge = weeklyChallenge();
+  const entry = weeklyEntries.get(`${challenge.weekId}:${user.id}`) ?? null;
+  const ranked = [...weeklyEntries.values()].filter((item) => item.weekId === challenge.weekId && item.completedAt && item.correct && item.elapsedMs !== null).sort((left, right) => (left.elapsedMs ?? Infinity) - (right.elapsedMs ?? Infinity) || (left.completedAt ?? '').localeCompare(right.completedAt ?? ''));
+  const myRank = entry?.completedAt ? ranked.findIndex((item) => item.id === entry.id) + 1 : null;
+  return {
+    id: challenge.id,
+    weekId: challenge.weekId,
+    title: challenge.title,
+    description: challenge.description,
+    startsAt: challenge.startsAt,
+    endsAt: challenge.endsAt,
+    durationSeconds: challenge.durationSeconds,
+    questions: challenge.questions.map(({ answerIndex: _answerIndex, ...question }) => question),
+    entry: entry ? { startedAt: entry.startedAt, completedAt: entry.completedAt, elapsedMs: entry.elapsedMs, pointsAwarded: entry.pointsAwarded, rank: myRank } : null,
+    leaderboard: ranked.slice(0, 10).map((item, index) => ({ rank: index + 1, name: findUser(item.userId)?.name ?? 'Novo member', elapsedMs: item.elapsedMs!, points: item.pointsAwarded, isCurrentUser: item.userId === user.id })),
+  };
 }
 
 function previousSingaporeDate(date: string) {
@@ -784,6 +868,19 @@ app.get('/api/member/daily-status', (request, response) => {
   });
 });
 
+app.post('/api/member/wristband/reserve', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    if (user.wristbandPaired) return response.status(409).json({ message: 'This account already has a paired wristband.' });
+    const { pickupLocation } = pickupReservationSchema.parse(request.body);
+    user.wristbandPickupLocation = pickupLocation;
+    response.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/member/wristband/pair', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
@@ -891,7 +988,49 @@ app.get('/api/member/tasks', (request, response) => {
       latitude: event.latitude,
       longitude: event.longitude,
     }));
-  response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(memberSubmission) });
+  response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(memberSubmission), weeklyCompetition: weeklyCompetitionView(user) });
+});
+
+app.post('/api/member/weekly/start', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  const challenge = weeklyChallenge();
+  const entryId = `${challenge.weekId}:${user.id}`;
+  if (!weeklyEntries.has(entryId)) weeklyEntries.set(entryId, { id: entryId, weekId: challenge.weekId, userId: user.id, startedAt: new Date().toISOString(), completedAt: null, elapsedMs: null, pointsAwarded: 0, correct: false });
+  response.json({ weeklyCompetition: weeklyCompetitionView(user) });
+});
+
+app.post('/api/member/weekly/complete', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    const challenge = weeklyChallenge();
+    const entry = weeklyEntries.get(`${challenge.weekId}:${user.id}`);
+    if (!entry) return response.status(409).json({ message: 'Start this week’s sprint before submitting answers.' });
+    if (entry.completedAt) return response.status(409).json({ message: 'You have already completed this week’s sprint.' });
+    const elapsedMs = Date.now() - Date.parse(entry.startedAt);
+    if (elapsedMs > challenge.durationSeconds * 1000) return response.status(408).json({ message: 'Time is up. A new competition opens next week.' });
+    const { answers } = weeklySubmissionSchema.parse(request.body);
+    if (!answers.every((answer, index) => answer === challenge.questions[index]?.answerIndex)) return response.status(422).json({ message: 'Not all answers are correct yet. Check your choices while the timer is running.' });
+    entry.completedAt = new Date().toISOString();
+    entry.elapsedMs = elapsedMs;
+    entry.correct = true;
+    const rankedEntries = [...weeklyEntries.values()].filter((item) => item.weekId === challenge.weekId && item.completedAt && item.correct && item.elapsedMs !== null).sort((left, right) => (left.elapsedMs ?? Infinity) - (right.elapsedMs ?? Infinity));
+    rankedEntries.forEach((rankedEntry, index) => {
+      const desiredPoints = [300, 220, 160, 120, 90][index] ?? 60;
+      const difference = desiredPoints - rankedEntry.pointsAwarded;
+      if (!difference) return;
+      const member = findUser(rankedEntry.userId);
+      if (member) {
+        member.points = Math.max(0, member.points + difference);
+        member.lifetimePoints = Math.max(0, member.lifetimePoints + difference);
+      }
+      rankedEntry.pointsAwarded = desiredPoints;
+    });
+    response.json({ weeklyCompetition: weeklyCompetitionView(user), user });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/member/events/:eventId/signup', (request, response) => {
@@ -1072,7 +1211,8 @@ app.post('/api/member/market/purchase', (request, response, next) => {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
     const { accessoryId } = memberPurchaseSchema.parse(request.body);
-    const price = memberRewards[accessoryId];
+    const listing = [...marketItems.values()].find((item) => item.active && item.category === 'accessory' && (item.accessoryId === accessoryId || inferAccessoryId(item.id, item.name) === accessoryId));
+    const price = listing?.price ?? memberRewards[accessoryId];
     if (!price) return response.status(404).json({ message: 'This reward is not currently available.' });
     if (user.accessories.includes(accessoryId)) return response.status(409).json({ message: 'This reward is already in your wardrobe.' });
     if (user.points < price) return response.status(409).json({ message: 'You need more leaves for this reward.' });
@@ -1085,11 +1225,21 @@ app.post('/api/member/market/purchase', (request, response, next) => {
   }
 });
 
+app.get('/api/member/market', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  response.json({ items: [...marketItems.values()].filter((item) => item.active).sort((left, right) => left.category.localeCompare(right.category) || left.price - right.price) });
+});
+
 app.post('/api/member/charity/contribute', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-    const { points, causeId, causeName } = contributionSchema.parse(request.body);
+    const requested = contributionSchema.parse(request.body);
+    const listing = marketItems.get(requested.causeId);
+    const points = listing?.active && listing.category === 'charity' ? listing.price : requested.points;
+    const causeId = listing?.active && listing.category === 'charity' ? listing.id : requested.causeId;
+    const causeName = listing?.active && listing.category === 'charity' ? listing.name : requested.causeName;
     if (user.points < points) return response.status(409).json({ message: 'You need more leaves to contribute.' });
     user.points -= points;
     const contribution: Donation = { id: `don_${crypto.randomUUID()}`, userId: user.id, causeId, causeName, points, createdAt: new Date().toISOString() };
@@ -1104,7 +1254,11 @@ app.post('/api/member/market/coupon/redeem', (request, response, next) => {
   try {
     const user = memberFromRequest(request);
     if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-    const { offerId, name, points } = couponSchema.parse(request.body);
+    const requested = couponSchema.parse(request.body);
+    const listing = marketItems.get(requested.offerId);
+    const offerId = listing?.active && listing.category === 'coupon' ? listing.id : requested.offerId;
+    const name = listing?.active && listing.category === 'coupon' ? listing.name : requested.name;
+    const points = listing?.active && listing.category === 'coupon' ? listing.price : requested.points;
     if (user.coupons.some((coupon) => coupon.offerId === offerId)) return response.status(409).json({ message: 'This coupon is already in your rewards wallet.' });
     if (user.points < points) return response.status(409).json({ message: 'You need more leaves to redeem this coupon.' });
     user.points -= points;

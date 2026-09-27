@@ -79,6 +79,19 @@ export type NovoEvent = {
 };
 
 export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string };
+export type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
+export type WeeklyCompetition = {
+  id: string;
+  weekId: string;
+  title: string;
+  description: string;
+  startsAt: string;
+  endsAt: string;
+  durationSeconds: number;
+  questions: Array<{ id: string; prompt: string; options: string[] }>;
+  entry: { startedAt: string; completedAt: string | null; elapsedMs: number | null; pointsAwarded: number; rank: number | null } | null;
+  leaderboard: Array<{ rank: number; name: string; elapsedMs: number; points: number; isCurrentUser: boolean }>;
+};
 export type LeaderboardEntry = { rank: number; id: string; name: string; mascotName: string; mascotType: MascotType; lifetimePoints: number; accessories: AccessoryId[]; isCurrentUser: boolean };
 export type Friend = { id: string; name: string; mascotName: string; mascotType: MascotType; lifetimePoints: number; accessories: AccessoryId[] };
 
