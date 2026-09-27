@@ -1,6 +1,6 @@
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('Development', 'Production')]
+  [ValidateSet('Development', 'Beta', 'Production')]
   [string]$Environment = 'Development',
 
   [Parameter(Position = 1)]
@@ -23,6 +23,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $repoRoot 'apps\mobile'
 $artifactRoot = Join-Path $repoRoot 'artifacts'
 $productionApiUrl = 'https://novo.tancheetiong.com/api'
+$betaApiUrl = 'https://novodev.tancheetiong.com/api'
 
 function Get-PrivateAddressRank([string]$Address) {
   if ($Address -match '^192\.168\.') { return 0 }
@@ -84,6 +85,17 @@ function Get-JavaMajorVersion([string]$HomePath) {
   return $null
 }
 
+function Get-Sha256Hash([string]$FilePath) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($FilePath)
+  try {
+    return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+  } finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+  }
+}
+
 function Find-CompatibleJavaHome {
   $candidateHomes = [System.Collections.Generic.List[string]]::new()
   if ($env:JAVA_HOME) { $candidateHomes.Add($env:JAVA_HOME) }
@@ -121,11 +133,13 @@ function Find-CompatibleJavaHome {
 $environmentName = $Environment.ToLowerInvariant()
 $detectedNetwork = $null
 if (-not $ApiUrl) {
-  if ($Environment -eq 'Production') {
-    $ApiUrl = $productionApiUrl
-  } else {
-    $detectedNetwork = Get-CurrentLanAddress
-    $ApiUrl = "http://$($detectedNetwork.Address):$ServerPort/api"
+  switch ($Environment) {
+    'Production' { $ApiUrl = $productionApiUrl }
+    'Beta' { $ApiUrl = $betaApiUrl }
+    default {
+      $detectedNetwork = Get-CurrentLanAddress
+      $ApiUrl = "http://$($detectedNetwork.Address):$ServerPort/api"
+    }
   }
 }
 
@@ -133,8 +147,8 @@ $ApiUrl = $ApiUrl.TrimEnd('/')
 if ($ApiUrl -notmatch '^https?://[^\s]+/api$') {
   throw "Invalid API URL '$ApiUrl'. Expected an HTTP(S) URL ending in /api."
 }
-if ($Environment -eq 'Production' -and $ApiUrl -notmatch '^https://') {
-  throw 'Production builds require an HTTPS API URL.'
+if ($Environment -in @('Beta', 'Production') -and $ApiUrl -notmatch '^https://') {
+  throw "$Environment builds require an HTTPS API URL."
 }
 
 $env:NOVO_BUILD_ENV = $environmentName
@@ -142,7 +156,7 @@ $env:EXPO_PUBLIC_API_URL = $ApiUrl
 
 $buildAndroid = $Platform -in @('Android', 'All')
 $buildIos = $Platform -in @('iOS', 'All')
-$androidMode = if ($Mode -eq 'Auto') { if ($Environment -eq 'Production') { 'Cloud' } else { 'Local' } } else { $Mode }
+$androidMode = if ($Mode -eq 'Auto') { if ($Environment -in @('Development', 'Beta')) { 'Local' } else { 'Cloud' } } else { $Mode }
 $iosMode = if ($Mode -eq 'Auto') { 'Cloud' } else { $Mode }
 if ($buildIos -and $iosMode -eq 'Local') {
   throw 'Local iOS app packaging requires macOS and Xcode. From Windows, use -Mode Cloud (or Auto) so EAS can create the installable iOS build.'
@@ -152,9 +166,11 @@ if ($buildAndroid -and $Environment -eq 'Development' -and $androidMode -eq 'Clo
 }
 
 Write-Host "Build environment: $environmentName"
+Write-Host "App title: $(if ($Environment -eq 'Development') { 'novo Development' } elseif ($Environment -eq 'Beta') { 'novo Beta' } else { 'novo' })"
 Write-Host "Embedded API URL: $ApiUrl"
 Write-Host "Requested platform: $($Platform.ToLowerInvariant())"
 if ($buildAndroid) { Write-Host "Android builder: $($androidMode.ToLowerInvariant())" }
+if ($buildAndroid) { Write-Host "Android signing: $(if ($androidMode -eq 'Local') { 'local development key' } else { 'EAS distribution credentials' })" }
 if ($buildIos) { Write-Host "iOS builder: $($iosMode.ToLowerInvariant())" }
 if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interface) ($($detectedNetwork.Address))" }
 
@@ -231,21 +247,39 @@ try {
     $env:EXPO_NO_METRO_WORKSPACE_ROOT = '1'
     $env:NODE_ENV = 'production'
 
+    # Do not inherit a machine-wide GRADLE_USER_HOME such as C:\.gradle. That
+    # location commonly requires administrator access and makes local builds
+    # fail before Gradle can download its wrapper. Keep the cache in the
+    # current Windows user's local application data instead.
+    $gradleUserHome = Join-Path $env:LOCALAPPDATA 'Novo\Gradle'
+    New-Item -ItemType Directory -Force -Path $gradleUserHome | Out-Null
+    $env:GRADLE_USER_HOME = $gradleUserHome
+
     Write-Host 'Builder: local Android toolchain'
     Write-Host "Using JDK $($selectedJava.Major): $($selectedJava.Home)"
     Write-Host "Using Android SDK: $androidSdk"
+    Write-Host "Using Gradle cache: $gradleUserHome"
     if ($Environment -eq 'Production') {
-      Write-Warning 'This local production-target APK may use the generated local signing configuration. Use Auto or -Mode Cloud for an EAS-signed distribution APK.'
+      Write-Warning "This local $environmentName APK may use the generated local signing configuration. Use Auto or -Mode Cloud for an EAS-signed distribution APK."
     }
-    npx expo prebuild --platform android --no-install
-    if ($LASTEXITCODE -ne 0) { throw 'Expo prebuild failed.' }
+    # The native directory is generated output (and is ignored by Git). A clean
+    # prebuild prevents an interrupted previous run from poisoning the next APK.
+    $npxCommand = (Get-Command npx.cmd -ErrorAction Stop).Source
+    & $npxCommand expo prebuild --platform android --no-install --clean
+    $prebuildExitCode = $LASTEXITCODE
+    $gradleWrapper = Join-Path $mobileRoot 'android\gradlew.bat'
+    if ($prebuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $gradleWrapper)) {
+      throw "Expo prebuild failed with exit code $prebuildExitCode."
+    }
     $buildStartedAt = Get-Date
     Push-Location (Join-Path $mobileRoot 'android')
     try {
       # Expo public environment variables are compiled into the JavaScript bundle.
       # A plain assembleRelease can reuse a bundle from a previous target because
       # Gradle does not track those shell variables as task inputs.
-      .\gradlew.bat :app:clean :app:assembleRelease --no-build-cache
+      # A one-shot daemon prevents Java from carrying a transient negative DNS
+      # cache into the next build attempt while still reusing Gradle's files.
+      .\gradlew.bat :app:clean :app:assembleRelease --no-build-cache --no-daemon
       if ($LASTEXITCODE -ne 0) { throw 'Gradle APK build failed.' }
     } finally {
       Pop-Location
@@ -273,22 +307,22 @@ try {
     }
     $targetApk = Join-Path $artifactRoot "novo-$environmentName.apk"
     Copy-Item -LiteralPath $sourceApk -Destination $targetApk -Force
-    $sourceHash = (Get-FileHash -LiteralPath $sourceApk -Algorithm SHA256).Hash
-    $targetHash = (Get-FileHash -LiteralPath $targetApk -Algorithm SHA256).Hash
+    $sourceHash = Get-Sha256Hash $sourceApk
+    $targetHash = Get-Sha256Hash $targetApk
     if ($sourceHash -ne $targetHash) { throw 'The copied APK failed SHA-256 verification.' }
     Write-Host "APK ready: $targetApk"
     Write-Host "Built: $($sourceItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
     Write-Host "SHA-256: $targetHash"
   } elseif ($buildAndroid) {
     Write-Host 'Builder: EAS cloud'
-    $androidProfile = if ($Environment -eq 'Production') { 'production-apk' } else { 'development-android' }
+    $androidProfile = if ($Environment -eq 'Production') { 'production-apk' } elseif ($Environment -eq 'Beta') { 'beta-android' } else { 'development-android' }
     Write-Host "Starting a signed Android internal-distribution build with profile $androidProfile. EAS may ask you to sign in."
     npx eas-cli build --platform android --profile $androidProfile
     if ($LASTEXITCODE -ne 0) { throw 'EAS APK build failed.' }
   }
 
   if ($buildIos) {
-    $iosProfile = if ($Environment -eq 'Production') { 'production-ios' } else { 'development-ios' }
+    $iosProfile = if ($Environment -eq 'Production') { 'production-ios' } elseif ($Environment -eq 'Beta') { 'beta-ios' } else { 'development-ios' }
     Write-Host 'Builder: EAS cloud for iOS'
     Write-Host "Starting an installable iOS internal-distribution build with profile $iosProfile. Apple Developer credentials and registered test devices may be required."
     npx eas-cli build --platform ios --profile $iosProfile

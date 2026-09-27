@@ -53,16 +53,23 @@ Choose the target directly in the command; there is no machine-specific configur
 # Keep this running in its own terminal while testing the APK
 npm run start:server
 
-# Android beta testing on the same Wi-Fi as this computer
+# Local Android development using this computer's current IP
 npm run build:android:development
 
-# iPhone beta testing through EAS internal distribution
+# Local-network iPhone development through EAS internal distribution
 npm run build:ios:development
 
-# Build both targets (local Android, then cloud iOS)
+# Build both development targets (local Android, then cloud iOS)
 npm run build:mobile:development -- -Platform All
 
-# Closed testing or direct distribution against the public server
+# Locally installable Android beta and EAS iOS beta testing
+npm run build:android:beta
+npm run build:ios:beta
+
+# Build local Android first, then the EAS iOS beta
+npm run build:mobile:beta -- -Platform All
+
+# Production against novo.tancheetiong.com
 npm run build:android:production
 npm run build:ios:production
 ```
@@ -70,13 +77,15 @@ npm run build:ios:production
 The older `build:apk:*` commands remain as Android aliases. The general command accepts `-Platform Android`, `-Platform iOS`, or `-Platform All`; development is the default environment and Android is the default platform.
 
 - **Development** discovers the current active private Wi-Fi/Ethernet IPv4 address at build time and embeds `http://CURRENT-IP:4000/api`. The phone and computer must be on the same network. Keep `npm run start:server` running while building and using the APK. Before Gradle starts, the script now verifies both the port listener and `CURRENT-IP:4000/api/health`; it refuses to build an APK with an unreachable development endpoint. The artifact is `artifacts/novo-development.apk`.
+- **Beta** displays as **novo Beta** and embeds `https://novodev.tancheetiong.com/api`. Android builds locally with the generated development key—without EAS or production distribution signing—and produces the installable `artifacts/novo-beta.apk`. iOS Beta continues through EAS internal distribution because installable iOS apps require Apple signing.
 - **Production** always embeds `https://novo.tancheetiong.com/api`. Auto mode starts a signed EAS internal-distribution build using the `production-apk` profile, making it suitable for closed testing and direct installation.
+- The launcher title is **novo Development** for development builds, **novo Beta** for beta builds, and **novo** for production builds.
 - **iOS** uses an EAS cloud internal-distribution build from Windows because an installable iOS package requires macOS/Xcode and Apple signing. EAS may ask for an Expo login, Apple Developer credentials, and registration of test-device UDIDs. The resulting install link and IPA are supplied by EAS.
-- Preview a resolved target without building using `npm run build:mobile:development -- -Platform iOS -ShowConfig` or `npm run build:mobile:production -- -Platform All -ShowConfig`.
-- Override unusual development networks with `-ApiUrl http://YOUR-IP:4000/api`. Production overrides must use HTTPS.
+- Preview a resolved target without building using `npm run build:mobile:development -- -Platform iOS -ShowConfig`, `npm run build:mobile:beta -- -Platform All -ShowConfig`, or `npm run build:mobile:production -- -Platform All -ShowConfig`.
+- Override unusual development networks with `-ApiUrl http://YOUR-IP:4000/api`. Beta and production overrides must use HTTPS.
 - `-SkipServerCheck` is available only for deliberate offline development builds; the API must still be running when the APK is used.
 - If a physical Android phone is connected through ADB, the script also checks the selected API URL from the phone itself. Run `npm run build:apk -- development -VerifyOnly` to perform all computer and device connectivity checks without building an APK.
-- Force a builder with `-Mode Local` or `-Mode Cloud`. Android development defaults to the local toolchain; iOS always requires cloud building on this Windows workflow. A forced local production Android build creates `artifacts/novo-production.apk`, but should be treated as a device smoke-test build unless you have separately configured production signing.
+- Force a builder with `-Mode Local` or `-Mode Cloud`. Android development and beta default to the local toolchain and do not need EAS distribution signing; `-Mode Cloud` remains available when a signed Beta distribution is specifically wanted. iOS always requires cloud building on this Windows workflow. A forced local production Android build creates `artifacts/novo-production.apk`, but should be treated as a device smoke-test build unless you have separately configured production signing.
 - Local mode requires Android Studio, the Android SDK, and JDK 17–23. If needed, pass `-JavaHome 'C:\path\to\jdk-17'`.
 - The selected environment and API URL are compiled into the standalone app through Expo config, so a new APK is required when changing targets.
 - Local APK builds clean the app release task before bundling, reject stale Gradle output, inspect the bundled API URL, and verify the copied file with SHA-256. The final timestamp and hash are printed after every successful build.
