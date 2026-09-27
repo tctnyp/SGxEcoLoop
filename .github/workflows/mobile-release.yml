@@ -127,9 +127,13 @@ jobs:
       - name: Build unsigned iOS application
         run: |
           set -euo pipefail
+          workspace="$(find apps/mobile/ios -maxdepth 1 -name '*.xcworkspace' -type d -print -quit)"
+          test -n "$workspace"
+          scheme="$(basename "$workspace" .xcworkspace)"
+          echo "Building workspace $workspace with scheme $scheme"
           xcodebuild \
-            -workspace apps/mobile/ios/novo.xcworkspace \
-            -scheme novo \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath "$RUNNER_TEMP/novo-derived" \
