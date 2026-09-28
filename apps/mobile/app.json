@@ -3,7 +3,7 @@
     "name": "novo",
     "slug": "novo",
     "scheme": "novo",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -15,13 +15,13 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "11",
+      "buildNumber": "12",
       "icon": "./assets/icon.png",
       "bundleIdentifier": "com.novo.ecoloop"
     },
     "android": {
       "package": "com.novo.ecoloop",
-      "versionCode": 11,
+      "versionCode": 12,
       "permissions": [
         "android.permission.NFC",
         "android.permission.CAMERA",

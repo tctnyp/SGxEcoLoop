@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { Keyboard, KeyboardAvoidingView, LayoutChangeEvent, Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { API_URL, checkEmailStatus, continueWithGoogle, requestPasswordReset, restoreMobileSession, signIn } from '../api';
+import { API_URL, checkEmailStatus, requestPasswordReset, restoreMobileSession, signIn } from '../api';
 import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
 import { Plushie } from '../components/Plushie';
@@ -32,10 +31,6 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const [plushieFrame, setPlushieFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState<'email' | 'password' | 'google' | 'discord' | 'reset' | null>(null);
-  const configuredGoogleClientId = Platform.select({ android: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID, ios: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID, default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID }) ?? process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID;
-  const googleClientId = configuredGoogleClientId ?? 'not-configured.apps.googleusercontent.com';
-  const [googleRequest, , promptGoogle] = Google.useIdTokenAuthRequest({ clientId: googleClientId, androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? googleClientId, iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? googleClientId, webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? googleClientId, selectAccount: true });
-
   const captureFrame = (setter: typeof setHeroCopyFrame) => (event: LayoutChangeEvent) => setter(event.nativeEvent.layout);
   const constrained = !wide && (keyboardVisible || height < 620);
   const compactPlushieScale = constrained ? 0.5 : short ? 0.58 : 0.72;
@@ -97,26 +92,13 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
     }
   };
 
-  const handleGoogle = async () => {
+  const handleOAuthProvider = async (provider: 'google' | 'discord') => {
     setError('');
-    setLoading('google');
+    setLoading(provider);
     try {
-      const response = await promptGoogle();
-      if (response.type !== 'success' || !response.params.id_token) throw new Error(response.type === 'dismiss' || response.type === 'cancel' ? 'Google sign-in was cancelled.' : 'Google did not return a verified identity.');
-      await onAuthenticated(await continueWithGoogle(response.params.id_token));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Google sign in did not work.');
-    } finally {
-      setLoading(null);
-    }
-  };
-
-  const handleDiscord = async () => {
-    setError('');
-    setLoading('discord');
-    try {
-      const result = await WebBrowser.openAuthSessionAsync(`${API_URL}/auth/discord/start?platform=mobile`, 'novo://auth/oauth');
-      if (result.type !== 'success') throw new Error(result.type === 'cancel' || result.type === 'dismiss' ? 'Discord sign-in was cancelled.' : 'Discord sign-in did not complete.');
+      const label = provider === 'google' ? 'Google' : 'Discord';
+      const result = await WebBrowser.openAuthSessionAsync(`${API_URL}/auth/${provider}/start?platform=mobile`, 'novo://auth/oauth');
+      if (result.type !== 'success') throw new Error(result.type === 'cancel' || result.type === 'dismiss' ? `${label} sign-in was cancelled.` : `${label} sign-in did not complete.`);
       const url = new URL(result.url);
       const oauthError = url.searchParams.get('oauthError');
       if (oauthError) throw new Error(oauthError);
@@ -131,13 +113,16 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
         await onAuthenticated({ isNewUser: true, draft: { email: oauthEmail, name: url.searchParams.get('name') ?? '' } });
         return;
       }
-      throw new Error('Discord did not return a novo session.');
+      throw new Error(`${label} did not return a novo session.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Discord sign in did not work.');
+      setError(err instanceof Error ? err.message : `${provider === 'google' ? 'Google' : 'Discord'} sign in did not work.`);
     } finally {
       setLoading(null);
     }
   };
+
+  const handleGoogle = () => handleOAuthProvider('google');
+  const handleDiscord = () => handleOAuthProvider('discord');
 
   const handlePasswordReset = async () => {
     const normalizedEmail = (email ?? '').trim();
@@ -185,7 +170,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
             <View style={styles.form}>
               {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
-                {!constrained && <><View style={styles.socialButtons}><Button label={configuredGoogleClientId ? 'Google' : 'Google needs setup'} icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={!configuredGoogleClientId || !googleRequest}/><Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/></View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
+                {!constrained && <><View style={styles.socialButtons}><Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/><Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/></View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
                 <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
                 {!constrained && <View style={styles.signupRow}>
