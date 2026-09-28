@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 export type LockerLocation = {
   id: string;
   kind: 'pick-locker' | 'singpost-locker' | 'return-right';
@@ -51,6 +54,19 @@ export const fallbackLockerLocations: LockerLocation[] = [
   { id: 'pop-fallback-toa-payoh', kind: 'singpost-locker', name: 'POPStation @ Toa Payoh Central Post Office', address: '520 Lorong 6 Toa Payoh, Singapore 310520', latitude: 1.3321, longitude: 103.8483, hours: '24 hours', sourceUrl: POPSTATION_LOCATOR_URL },
   { id: 'pop-fallback-ang-mo-kio', kind: 'singpost-locker', name: 'POPStation @ Ang Mo Kio Central Post Office', address: '727 Ang Mo Kio Avenue 6, Singapore 560727', latitude: 1.3726, longitude: 103.8465, hours: '24 hours', sourceUrl: POPSTATION_LOCATOR_URL },
 ];
+
+type PickSnapshot = { updatedAt: string; sourceUrl: string; locations: LockerLocation[] };
+
+function readPickSnapshot() {
+  try {
+    const snapshotPath = fileURLToPath(new URL('../data/pick-lockers.snapshot.json', import.meta.url));
+    const snapshot = JSON.parse(readFileSync(snapshotPath, 'utf8')) as PickSnapshot;
+    return Array.isArray(snapshot.locations) && snapshot.locations.length >= 1000 ? snapshot : null;
+  } catch {
+    return null;
+  }
+}
+const pickSnapshot = readPickSnapshot();
 
 function clean(parts: Array<string | null | undefined>) {
   return parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part));
@@ -133,7 +149,7 @@ type LockerDirectory = {
   updatedAt: string;
   lockers: LockerLocation[];
   sourceCounts: { pick: number; popStation: number };
-  source: 'live' | 'cached' | 'fallback';
+  source: 'live' | 'cached' | 'snapshot' | 'fallback';
 };
 
 let cache: LockerDirectory | null = null;
@@ -151,11 +167,12 @@ export async function getLockerDirectory(options: { refresh?: boolean; offline?:
   const [pickResult, popResult] = await Promise.allSettled([retrievePickLockers(), retrievePopStations()]);
   const persistedPick = options.persisted?.filter((locker) => locker.kind === 'pick-locker') ?? [];
   const persistedPopStation = options.persisted?.filter((locker) => locker.kind === 'singpost-locker') ?? [];
-  const pick = pickResult.status === 'fulfilled' ? pickResult.value : persistedPick.length ? persistedPick : fallbackLockerLocations.filter((locker) => locker.kind === 'pick-locker');
+  const pick = pickResult.status === 'fulfilled' ? pickResult.value : persistedPick.length ? persistedPick : pickSnapshot?.locations ?? fallbackLockerLocations.filter((locker) => locker.kind === 'pick-locker');
   const popStation = popResult.status === 'fulfilled' ? popResult.value : persistedPopStation.length ? persistedPopStation : fallbackLockerLocations.filter((locker) => locker.kind === 'singpost-locker');
   const lockers = [...pick, ...popStation].sort((left, right) => left.name.localeCompare(right.name, 'en-SG'));
   const liveCount = Number(pickResult.status === 'fulfilled') + Number(popResult.status === 'fulfilled');
-  cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), lockers, sourceCounts: { pick: pick.length, popStation: popStation.length }, source: liveCount === 2 ? 'live' : liveCount === 0 && (persistedPick.length || persistedPopStation.length) ? 'cached' : 'fallback' };
+  const usedSnapshot = pickResult.status === 'rejected' && !persistedPick.length && Boolean(pickSnapshot);
+  cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: usedSnapshot ? pickSnapshot!.updatedAt : new Date().toISOString(), lockers, sourceCounts: { pick: pick.length, popStation: popStation.length }, source: liveCount === 2 ? 'live' : usedSnapshot ? 'snapshot' : liveCount === 0 && (persistedPick.length || persistedPopStation.length) ? 'cached' : 'fallback' };
   return cache;
 }
 
