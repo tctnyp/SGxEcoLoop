@@ -19,7 +19,7 @@ import { ACCESSORIES } from '../data/accessories';
 import { ACCESSORY_COLOR_SEEDS, AccessoryColorScheme, createAccessoryColorScheme } from '../dynamicTheme';
 import { colors } from '../theme';
 import { AccessoryCategory, AccessoryId, AccessoryRarity, Friend, MarketItem, MascotType, NovoEvent, NovoLocation, TaskSubmission, User, WeeklyCompetition } from '../types';
-import { API_URL, completeWeeklyCompetition, getFriends, getLocations, getMemberMarket, getMemberTasks, signUpForEvent, startWeeklyCompetition, submitCustomTask, submitDailyQuiz, submitDailyTask } from '../api';
+import { completeWeeklyCompetition, createFriendInviteUrl, getFriends, getLocations, getMemberMarket, getMemberTasks, signUpForEvent, startWeeklyCompetition, submitCustomTask, submitDailyQuiz, submitDailyTask } from '../api';
 import { startNovoWristbandListener } from '../nfc';
 
 type Tab = 'home' | 'marketplace' | 'tasks' | 'friends' | 'settings';
@@ -816,11 +816,14 @@ function EventCard({ event, onPress }: { event: NovoEvent; onPress: () => void }
 }
 
 function FriendsPage({ user, token, palette }: { user: User; token: string; palette: Palette }) {
-  const inviteUrl = `${API_URL.replace(/\/api$/, '')}/invite/${encodeURIComponent(user.id)}`;
+  const inviteUrl = createFriendInviteUrl(user.id);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [questFriends, setQuestFriends] = useState<string[]>([]);
   useEffect(() => { getFriends(token).then(setFriends).catch(() => setFriends([])); }, [token]);
-  const shareInvite = () => Share.share({ message: `Join my Novo circle: ${inviteUrl}` });
+  const shareInvite = () => Share.share({
+    title: 'Join my novo circle',
+    message: `Join my novo circle:\n${inviteUrl}`,
+  });
 
   return (
     <View style={styles.pagePad}>

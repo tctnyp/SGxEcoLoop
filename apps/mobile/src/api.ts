@@ -28,6 +28,14 @@ function resolveApiUrl() {
 
 export const API_URL = resolveApiUrl();
 
+function resolvePublicAppUrl(apiUrl: string) {
+  const origin = apiUrl.match(/^https?:\/\/[^/]+/i)?.[0];
+  return origin ?? PRODUCTION_API_URL.replace(/\/api$/, '');
+}
+
+export const PUBLIC_APP_URL = resolvePublicAppUrl(API_URL);
+export const createFriendInviteUrl = (userId: string) => `${PUBLIC_APP_URL}/invite/${encodeURIComponent(userId)}`;
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
