@@ -174,7 +174,11 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
             <View style={styles.form}>
               {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
-                {!constrained && <><View style={styles.socialButtons}>{providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/>} {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/>} {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'}/>}</View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
+                {!constrained && <><View style={styles.socialButtons}>
+                  {providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/>}
+                  {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/>}
+                  {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'}/>}
+                </View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
                 <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
                 {!constrained && <View style={styles.signupRow}>

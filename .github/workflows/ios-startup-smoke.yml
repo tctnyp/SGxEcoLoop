@@ -17,6 +17,7 @@ jobs:
     env:
       NOVO_BUILD_ENV: development
       EXPO_PUBLIC_API_URL: https://novodev.tancheetiong.com/api
+      EXPO_PUBLIC_IOS_SMOKE: '1'
 
     steps:
       - name: Check out repository

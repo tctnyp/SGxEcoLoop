@@ -13,6 +13,7 @@ export class AppErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('novo recovered from a startup error', error, info.componentStack);
+    if (process.env.EXPO_PUBLIC_IOS_SMOKE === '1') throw error;
   }
 
   render() {
