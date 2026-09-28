@@ -11,7 +11,7 @@ import { Text } from '../components/Typography';
 import { colors } from '../theme';
 import { AuthResult, OAuthProvider } from '../types';
 
-WebBrowser.maybeCompleteAuthSession();
+if (Platform.OS === 'web') WebBrowser.maybeCompleteAuthSession();
 
 type Props = {
   onAuthenticated: (result: AuthResult) => Promise<void>;
