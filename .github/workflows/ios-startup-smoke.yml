@@ -91,7 +91,10 @@ jobs:
             echo 'novo exited during startup.' >&2
             exit 1
           fi
-          if grep -Eqi 'Unhandled JS Exception|RCTFatal|Cannot find native module|Invariant Violation|TypeError:|ReferenceError:' "$log_file"; then
+          if {
+            sed '/^Filtering the log data using /d' "$log_file"
+            cat "$console_file"
+          } | grep -Eqi 'Unhandled JS Exception|RCTFatal|Cannot find native module|Invariant Violation|TypeError:|ReferenceError:|Text strings must be rendered'; then
             cat "$log_file"
             echo 'novo emitted a fatal startup error.' >&2
             exit 1
