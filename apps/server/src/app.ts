@@ -397,6 +397,7 @@ const memberProfileSchema = z.object({
   avatarDataUrl: z.string().regex(/^data:image\/(jpeg|jpg|png|webp);base64,/).max(6_000_000).nullable().optional(),
 });
 const memberPasswordSchema = z.object({ currentPassword: z.string().max(128), newPassword: strongPasswordSchema });
+const operationsProfileSchema = z.object({ name: z.string().trim().min(1).max(60) });
 
 const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200), pickupLocation: z.string().trim().min(3).max(240).optional() });
 const pickupReservationSchema = z.object({ pickupLocation: z.string().trim().min(3).max(240) });
@@ -798,6 +799,14 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
     if (linkedElsewhere && linkedElsewhere.id !== linkingUser.id) return response.redirect(oauthFailure(attempt.platform, `This ${oauthCredentials(attempt.provider).label} account is already linked to another novo account.`));
     linkingUser.linkedAccounts = linkingUser.linkedAccounts.filter((account) => account.provider !== attempt.provider);
     linkingUser.linkedAccounts.push({ provider: attempt.provider, subject: profile.subject, email });
+    if (attempt.platform === 'web') {
+      const account = portalAccounts.get(linkingUser.id);
+      if (!account) return response.redirect(oauthFailure('web', 'Your novo account could not be found.'));
+      const session = createWebSession(account);
+      await persistDatabase(persistedCollections);
+      response.redirect(`${publicAppUrl()}/?oauthToken=${encodeURIComponent(session.token)}&linked=${encodeURIComponent(attempt.provider)}`);
+      return;
+    }
     const token = createMobileSession(linkingUser.id);
     await persistDatabase(persistedCollections);
     response.redirect(`novo://auth/oauth?token=${encodeURIComponent(token)}&linked=${encodeURIComponent(attempt.provider)}`);
@@ -970,10 +979,12 @@ app.get('/api/auth/microsoft/callback', async (request, response) => {
     const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: process.env.MICROSOFT_CLIENT_ID!, client_secret: process.env.MICROSOFT_CLIENT_SECRET!, redirect_uri: oauthRedirectUri('microsoft'), grant_type: 'authorization_code', scope: 'openid profile email User.Read' }) });
     if (!tokenResponse.ok) throw new Error('Microsoft did not accept the authorization code.');
     const token = await tokenResponse.json() as { access_token?: string };
-    const profileResponse = await fetch('https://graph.microsoft.com/oidc/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    const profile = await profileResponse.json() as { sub?: string; email?: string; name?: string };
-    if (!profileResponse.ok || !profile.sub || !profile.email) throw new Error('Microsoft did not return an email address.');
-    await finishOAuth(response, attempt, { subject: profile.sub, email: profile.email, name: profile.name || profile.email.split('@')[0] || 'Novo member' });
+    if (!token.access_token) throw new Error('Microsoft did not return an access token.');
+    const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', { headers: { Authorization: `Bearer ${token.access_token}` } });
+    const profile = await profileResponse.json() as { id?: string; displayName?: string; mail?: string | null; userPrincipalName?: string | null };
+    const email = (profile.mail || profile.userPrincipalName || '').trim().toLowerCase();
+    if (!profileResponse.ok || !profile.id || !email.includes('@')) throw new Error('Microsoft did not return a usable email address.');
+    await finishOAuth(response, attempt, { subject: profile.id, email, name: profile.displayName || email.split('@')[0] || 'Novo member' });
   } catch (error) {
     response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Microsoft sign-in failed.'));
   }
@@ -1104,6 +1115,37 @@ app.get('/api/auth/session', async (request, response, next) => {
   }
 });
 
+app.patch('/api/auth/account/profile', (request, response, next) => {
+  try {
+    const session = sessionFromRequest(request);
+    if (!session) return response.status(401).json({ message: 'Session expired.' });
+    const account = portalAccounts.get(session.accountId);
+    if (!account) return response.status(404).json({ message: 'Account not found.' });
+    const { name } = operationsProfileSchema.parse(request.body);
+    account.name = name;
+    const user = findUser(account.id);
+    if (user) user.name = name;
+    response.json({ account });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/account/password', (request, response, next) => {
+  try {
+    const session = sessionFromRequest(request);
+    if (!session) return response.status(401).json({ message: 'Session expired.' });
+    const account = portalAccounts.get(session.accountId);
+    if (!account) return response.status(404).json({ message: 'Account not found.' });
+    const { currentPassword, newPassword } = memberPasswordSchema.parse(request.body);
+    if (credentials.has(account.email) && !passwordMatches(account.email, currentPassword)) return response.status(401).json({ message: 'Your current password is incorrect.' });
+    credentials.set(account.email, createCredential(account.email, newPassword));
+    response.json({ message: 'Password updated.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/auth/mobile-handoff/exchange', async (request, response, next) => {
   try {
     const { handoffToken } = handoffExchangeSchema.parse(request.body);
@@ -1201,7 +1243,8 @@ app.post('/api/member/oauth/:provider/link', (request, response) => {
   if (provider !== 'google' && provider !== 'discord' && provider !== 'microsoft') return response.status(404).json({ message: 'Unknown sign-in provider.' });
   const { clientId, clientSecret, label } = oauthCredentials(provider);
   if (!clientId || !clientSecret) return response.status(503).json({ message: `${label} linking is not configured yet.` });
-  response.json({ authorizationUrl: createOAuthAttempt(provider, 'mobile', user.id) });
+  const platform = request.query.platform === 'web' ? 'web' : 'mobile';
+  response.json({ authorizationUrl: createOAuthAttempt(provider, platform, user.id) });
 });
 
 app.get('/api/member/daily-status', (request, response) => {

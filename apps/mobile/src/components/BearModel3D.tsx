@@ -19,16 +19,6 @@ function SurfaceMaterial({ color, kind, roughness = 0.84 }: { color: string; kin
   return <meshPhysicalMaterial color={color} roughness={roughness} sheen={isScaly ? 0.08 : isFeathery ? 0.34 : 0.46} sheenRoughness={0.82} sheenColor={color} clearcoat={isScaly ? 0.18 : 0.02} clearcoatRoughness={0.74} />;
 }
 
-const COAT_TUFTS: Array<[number, number, number, number, number]> = [
-  [-0.62, 0.96, 0.65, -0.28, 0.09], [-0.34, 1.36, 0.56, -0.1, 0.08], [0, 1.5, 0.45, 0, 0.08], [0.34, 1.36, 0.56, 0.1, 0.08], [0.62, 0.96, 0.65, 0.28, 0.09],
-  [-0.72, 0.18, 0.62, -0.34, 0.1], [-0.42, -0.18, 0.75, -0.18, 0.1], [0, -0.3, 0.82, 0, 0.1], [0.42, -0.18, 0.75, 0.18, 0.1], [0.72, 0.18, 0.62, 0.34, 0.1],
-  [-0.58, -0.82, 0.55, -0.25, 0.1], [-0.2, -1.08, 0.62, -0.08, 0.09], [0.2, -1.08, 0.62, 0.08, 0.09], [0.58, -0.82, 0.55, 0.25, 0.1],
-];
-
-function CoatTufts({ color, sparse = false }: { color: string; sparse?: boolean }) {
-  return <group>{COAT_TUFTS.filter((_, index) => !sparse || index % 2 === 0).map(([x, y, z, rotation, size], index) => <mesh key={index} position={[x, y, z]} rotation={[Math.PI / 2 + rotation, 0, -rotation]} scale={[size, size * 2.1, size]}><coneGeometry args={[1, 1, 6]} /><meshStandardMaterial color={color} roughness={1} /></mesh>)}</group>;
-}
-
 function Eye({ x, y, z, scale = 1 }: { x: number; y: number; z: number; scale?: number }) {
   return <group position={[x, y, z]} scale={scale}><mesh scale={[0.105, 0.125, 0.075]}><sphereGeometry args={[1, 20, 16]} /><meshPhysicalMaterial color="#101716" roughness={0.18} clearcoat={0.7} /></mesh><mesh position={[-0.03, 0.045, 0.07]} scale={0.026}><sphereGeometry args={[1, 12, 8]} /><meshBasicMaterial color="#FFFFFF" /></mesh></group>;
 }
@@ -172,7 +162,7 @@ export function MascotModel3D({ mascotType, accessories, manualRotationX = 0, ma
   else if (mascotType === 'bird') animal = <Bird />;
   else animal = <PolarBear />;
 
-  return <group ref={group} scale={0.78}>{animal}{mascotType !== 'turtle' && <CoatTufts color={mascotType === 'penguin' ? '#252B2B' : mascotType === 'fox' ? '#E87833' : mascotType === 'bird' ? '#559ED4' : '#F7F7F2'} sparse={mascotType === 'bird'} />}<EquippedAccessories accessories={accessories} star={star} /></group>;
+  return <group ref={group} scale={0.78}>{animal}<EquippedAccessories accessories={accessories} star={star} /></group>;
 }
 
 export function MascotWorld({ mascotType, accessories, manualRotationX, manualRotationY, isInteracting, autoRotate }: { mascotType: MascotType; accessories: AccessoryId[]; manualRotationX?: number; manualRotationY?: number; isInteracting?: boolean; autoRotate?: boolean }) {

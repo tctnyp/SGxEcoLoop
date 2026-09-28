@@ -63,6 +63,34 @@ describe('novo API', () => {
     assert.equal(signedIn.status, 200);
   });
 
+  it('uses the Microsoft Graph user principal name when the mail field is empty', async () => {
+    await createMember('microsoft-user@example.com', 'Microsoft User');
+    process.env.MICROSOFT_CLIENT_ID = 'microsoft-test-client';
+    process.env.MICROSOFT_CLIENT_SECRET = 'microsoft-test-secret';
+    process.env.MICROSOFT_TENANT_ID = 'common';
+    const originalFetch = globalThis.fetch;
+    try {
+      const started = await request(app).get('/api/auth/microsoft/start?platform=web');
+      assert.equal(started.status, 302);
+      const state = new URL(started.headers.location).searchParams.get('state');
+      assert.ok(state);
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.includes('/oauth2/v2.0/token')) return new Response(JSON.stringify({ access_token: 'microsoft-access-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/v1.0/me')) return new Response(JSON.stringify({ id: 'microsoft-subject', displayName: 'Microsoft User', mail: null, userPrincipalName: 'microsoft-user@example.com' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response('Not found', { status: 404 });
+      };
+      const callback = await request(app).get(`/api/auth/microsoft/callback?state=${encodeURIComponent(state)}&code=test-code`);
+      assert.equal(callback.status, 302);
+      assert.match(callback.headers.location, /oauthToken=/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.MICROSOFT_CLIENT_ID;
+      delete process.env.MICROSOFT_CLIENT_SECRET;
+      delete process.env.MICROSOFT_TENANT_ID;
+    }
+  });
+
   it('provisions a coloured wristband, reveals its mascot and refreshes quests once daily', async () => {
     const { authorization } = await createMember('pair@example.com', 'Mina');
     const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'SUNSET-0004', wristbandColor: 'sunset-orange' });
@@ -309,6 +337,19 @@ describe('novo API', () => {
     assert.equal(signedIn.status, 200);
     assert.equal(signedIn.body.role, 'admin');
     assert.equal(signedIn.body.destination, 'operations');
+    const adminAuthorization = `Bearer ${signedIn.body.token}`;
+    const created = await request(app).post('/api/portal/accounts').set('Authorization', adminAuthorization).send({ name: 'Operations Profile', email: 'operations-profile@example.com', password: 'Original2#', role: 'staff', status: 'active' });
+    assert.equal(created.status, 201);
+    const operationsSignIn = await request(app).post('/api/auth/web-sign-in').send({ email: 'operations-profile@example.com', password: 'Original2#' });
+    const authorization = `Bearer ${operationsSignIn.body.token}`;
+    const changed = await request(app).patch('/api/auth/account/profile').set('Authorization', authorization).send({ name: 'Updated Operations Profile' });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.account.name, 'Updated Operations Profile');
+    const changedPassword = await request(app).post('/api/auth/account/password').set('Authorization', authorization).send({ currentPassword: 'Original2#', newPassword: 'Operations2#' });
+    assert.equal(changedPassword.status, 200);
+    const signedInAgain = await request(app).post('/api/auth/web-sign-in').send({ email: 'operations-profile@example.com', password: 'Operations2#' });
+    assert.equal(signedInAgain.status, 200);
+    assert.equal((await request(app).delete(`/api/portal/accounts/${created.body.account.id}`).set('Authorization', adminAuthorization)).status, 204);
   });
 
   it('creates a one-time mobile handoff for an existing member', async () => {

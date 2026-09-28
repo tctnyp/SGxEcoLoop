@@ -181,6 +181,7 @@ export function App() {
   const [mobileNav, setMobileNav] = useState(false);
   const [events, setEvents] = useState(initialEvents);
   const [eventModal, setEventModal] = useState(false);
+  const [accountDialog, setAccountDialog] = useState<CrudDialogConfig | null>(null);
   const [toast, setToast] = useState('');
 
   const showToast = (message: string) => {
@@ -254,6 +255,35 @@ export function App() {
   if (!role) return null;
 
   const navigate = (next: Page) => { setPage(next); setMobileNav(false); };
+  const editOperationsAccount = () => setAccountDialog({
+    eyebrow: 'YOUR OPERATIONS ACCOUNT',
+    title: 'Profile & security',
+    description: 'Update the name shown in novo Operations or choose a new password.',
+    submitLabel: 'Save account',
+    fields: [
+      { key: 'name', label: 'Display name', value: identity.account.name },
+      { key: 'currentPassword', label: 'Current password', value: '', type: 'password', required: false, hint: 'Required only when changing your password.' },
+      { key: 'newPassword', label: 'New password', value: '', type: 'password', required: false, hint: 'Use 9+ characters with uppercase, lowercase, a number and a special character.' },
+      { key: 'confirmPassword', label: 'Confirm new password', value: '', type: 'password', required: false },
+    ],
+    onSubmit: async (values) => {
+      const newPassword = values.newPassword ?? '';
+      if (newPassword && !strongPassword(newPassword)) { showToast(passwordRules.find((rule) => !rule.test(newPassword))?.label ?? 'Use a stronger password'); return false; }
+      if (newPassword !== (values.confirmPassword ?? '')) { showToast('New passwords do not match'); return false; }
+      if (newPassword && !values.currentPassword) { showToast('Enter your current password'); return false; }
+      const profileResponse = await fetch('/api/auth/account/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` }, body: JSON.stringify({ name: values.name }) });
+      const profileResult = await profileResponse.json().catch(() => ({}));
+      if (!profileResponse.ok || !profileResult.account) { showToast(profileResult.message ?? 'Profile could not be saved'); return false; }
+      if (newPassword) {
+        const passwordResponse = await fetch('/api/auth/account/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` }, body: JSON.stringify({ currentPassword: values.currentPassword, newPassword }) });
+        const passwordResult = await passwordResponse.json().catch(() => ({}));
+        if (!passwordResponse.ok) { showToast(passwordResult.message ?? 'Password could not be changed'); return false; }
+      }
+      setIdentity((current) => current ? { ...current, account: profileResult.account } : current);
+      showToast(newPassword ? 'Profile and password updated' : 'Profile updated');
+      return true;
+    },
+  });
 
   return (
     <div className="portal-shell">
@@ -275,7 +305,7 @@ export function App() {
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Icon name="menu" /></button>
           <div><p className="eyebrow">NOVO OPERATIONS</p><h1>{pageTitle(page)}</h1></div>
-          <div className="top-actions"><label className="search"><Icon name="search" size={18} /><input aria-label="Search portal" placeholder="Search" /></label><button className="avatar-button" aria-label="Account menu">{identity.account.name[0]}<span /></button></div>
+          <div className="top-actions"><label className="search"><Icon name="search" size={18} /><input aria-label="Search portal" placeholder="Search" /></label><button className="avatar-button" aria-label="Edit profile and password" title="Edit profile and password" onClick={editOperationsAccount}>{identity.account.name[0]}<span /></button></div>
         </header>
 
         <div className="content-wrap">
@@ -291,6 +321,7 @@ export function App() {
       </main>
 
       {eventModal && <CreateEvent token={identity.token} organizerId={identity.account.id} onClose={() => setEventModal(false)} onCreate={(event) => { setEvents((current) => [event, ...current]); setEventModal(false); setPage('events'); showToast('Event published successfully'); }} />}
+      {accountDialog && <CrudDialog config={accountDialog} onClose={() => setAccountDialog(null)} />}
       {toast && <div className="toast"><span><Icon name="check" size={17} /></span>{toast}</div>}
     </div>
   );
@@ -528,9 +559,57 @@ function MemberFriends({ token, inviteUrl, onCopy }: { token: string; inviteUrl:
 function MemberSettings({ identity, profile, onProfile, onGetApp, onSignOut, notify }: { identity: Identity; profile: MemberProfile; onProfile: (profile: MemberProfile) => void; onGetApp: () => void; onSignOut: () => void; notify: (message: string) => void }) {
   const [showCredits, setShowCredits] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [name, setName] = useState(profile.name);
+  const [username, setUsername] = useState(profile.username);
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(profile.avatarDataUrl);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState({ google: false, discord: false, microsoft: false });
+  useEffect(() => { setName(profile.name); setUsername(profile.username); setAvatarDataUrl(profile.avatarDataUrl); }, [profile.name, profile.username, profile.avatarDataUrl]);
+  useEffect(() => { fetch('/api/auth/providers').then((response) => response.json()).then((value: { google?: boolean; discord?: boolean; microsoft?: boolean }) => setProviders({ google: Boolean(value.google), discord: Boolean(value.discord), microsoft: Boolean(value.microsoft) })).catch(() => undefined); }, []);
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const response = await fetch('/api/member/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` }, body: JSON.stringify({ name, username, avatarDataUrl }) });
+      const result = await response.json();
+      if (!response.ok || !result.user) return notify(result.message ?? 'Profile could not be saved');
+      onProfile(result.user);
+      notify('Profile updated on web and mobile');
+    } finally { setBusy(false); }
+  };
+  const chooseAvatar = (file?: File) => {
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size > 4_500_000) return notify('Choose a JPG, PNG or WebP image under 4.5 MB');
+    const reader = new FileReader();
+    reader.onload = () => setAvatarDataUrl(typeof reader.result === 'string' ? reader.result : null);
+    reader.readAsDataURL(file);
+  };
+  const changePassword = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!strongPassword(newPassword)) return notify(passwordRules.find((rule) => !rule.test(newPassword))?.label ?? 'Use a stronger password');
+    if (newPassword !== confirmPassword) return notify('New passwords do not match');
+    setBusy(true);
+    try {
+      const response = await fetch('/api/member/password', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${identity.token}` }, body: JSON.stringify({ currentPassword, newPassword }) });
+      const result = await response.json();
+      if (!response.ok) return notify(result.message ?? 'Password could not be changed');
+      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+      notify('Password updated');
+    } finally { setBusy(false); }
+  };
+  const linkAccount = async (provider: 'google' | 'discord' | 'microsoft') => {
+    const response = await fetch(`/api/member/oauth/${provider}/link?platform=web`, { method: 'POST', headers: { Authorization: `Bearer ${identity.token}` } });
+    const result = await response.json();
+    if (!response.ok || !result.authorizationUrl) return notify(result.message ?? `${provider} could not be linked`);
+    window.location.assign(result.authorizationUrl);
+  };
   if (showCredits) return <MemberCredits onBack={() => setShowCredits(false)} />;
   if (showNotifications) return <MemberNotificationSettings token={identity.token} profile={profile} onProfile={onProfile} onBack={() => setShowNotifications(false)} notify={notify}/>;
-  return <div className="member-page settings-page"><div className="member-page-title"><div><p className="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p>Account preferences are shared with the mobile app.</p></div></div><div className="member-settings-grid"><section><div className="member-profile"><span>{identity.account.name[0]}</span><div><h2>{identity.account.name}</h2><p>{identity.account.email}</p></div><span className="member-profile-badge">Member</span></div><div className="setting-list"><button onClick={() => setShowNotifications(true)}><span><Icon name="spark"/></span><div><b>Notifications</b><small>Wristband, tasks, events, friends and rewards</small></div><Icon name="arrow"/></button><button onClick={() => setShowCredits(true)}><span><Icon name="leaf"/></span><div><b>Credits</b><small>Open-source software, maps and acknowledgements</small></div><Icon name="arrow"/></button><button onClick={onGetApp}><span><Icon name="phone"/></span><div><b>Open mobile app</b><small>NFC wristband touch, in-app camera and full 3D mascot</small></div><Icon name="arrow"/></button></div></section><aside><div className="web-limits"><span className="mobile-exclusive">MOBILE CORE</span><Icon name="phone" size={28}/><h3>Continue seamlessly</h3><p>Open the app with the same account, points and digital wardrobe. Wristband touch and camera features stay safely on your phone.</p><button className="primary wide" onClick={onGetApp}>Open mobile app</button></div><button className="outline-button wide" onClick={() => notify('Wristband unpairing is available in the app')}>Unpair in app</button><button className="danger-button wide" onClick={onSignOut}>Sign out</button></aside></div></div>;
+  const linkedProviders = new Set(profile.linkedAccounts.map((account) => account.provider));
+  return <div className="member-page settings-page"><div className="member-page-title"><div><p className="eyebrow">MAKE IT YOURS</p><h1>Settings</h1><p>Edit your novo profile, security and linked sign-in accounts from the website.</p></div></div><div className="member-settings-grid"><section><div className="member-profile"><span className="member-avatar">{avatarDataUrl ? <img src={avatarDataUrl} alt="Profile"/> : profile.name[0]}</span><div><h2>{profile.name}</h2><p>{profile.email}</p></div><span className="member-profile-badge">Member</span></div><form className="web-account-form" onSubmit={saveProfile}><div className="web-form-heading"><div><b>Profile</b><small>Visible to your novo friends.</small></div><label className="soft-button compact">Choose photo<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseAvatar(event.target.files?.[0])}/></label></div><label><span>Display name</span><input required maxLength={60} value={name} onChange={(event) => setName(event.target.value)}/></label><label><span>Username</span><input required minLength={3} maxLength={30} pattern="[A-Za-z0-9._-]+" value={username} onChange={(event) => setUsername(event.target.value)}/></label><div className="web-form-actions">{avatarDataUrl && <button type="button" className="text-button" onClick={() => setAvatarDataUrl(null)}>Remove photo</button>}<button className="primary" type="submit" disabled={busy}>Save profile</button></div></form><div className="linked-account-panel"><div className="web-form-heading"><div><b>Linked accounts</b><small>Use another trusted provider to sign in.</small></div></div>{(['google','discord','microsoft'] as const).map((provider) => <div className="linked-account-row" key={provider}><span>{provider[0].toUpperCase() + provider.slice(1)}</span><small>{linkedProviders.has(provider) ? profile.linkedAccounts.find((account) => account.provider === provider)?.email : providers[provider] ? 'Available to link' : 'Not configured'}</small><button type="button" className="soft-button compact" disabled={linkedProviders.has(provider) || !providers[provider] || busy} onClick={() => linkAccount(provider)}>{linkedProviders.has(provider) ? 'Linked' : 'Link'}</button></div>)}</div><div className="setting-list"><button onClick={() => setShowNotifications(true)}><span><Icon name="spark"/></span><div><b>Notifications</b><small>Wristband, tasks, events, friends and rewards</small></div><Icon name="arrow"/></button><button onClick={() => setShowCredits(true)}><span><Icon name="leaf"/></span><div><b>Credits</b><small>Open-source software, maps and acknowledgements</small></div><Icon name="arrow"/></button></div></section><aside><form className="web-account-form password-card" onSubmit={changePassword}><div className="web-form-heading"><div><b>Change password</b><small>Keep your account secure.</small></div><Icon name="shield"/></div><label><span>Current password</span><input type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)}/></label><label><span>New password</span><input type="password" autoComplete="new-password" required minLength={9} value={newPassword} onChange={(event) => setNewPassword(event.target.value)}/></label><label><span>Confirm new password</span><input type="password" autoComplete="new-password" required minLength={9} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)}/></label><div className="password-rules compact-rules">{passwordRules.map((rule) => <span className={rule.test(newPassword) ? 'met' : ''} key={rule.label}>{rule.test(newPassword) ? '✓' : '○'} {rule.label}</span>)}</div><button className="primary wide" type="submit" disabled={busy || !strongPassword(newPassword) || newPassword !== confirmPassword}>Update password</button></form><div className="web-limits"><span className="mobile-exclusive">MOBILE CORE</span><Icon name="phone" size={28}/><h3>Continue seamlessly</h3><p>NFC wristband touch, camera tasks and your full 3D mascot stay in the app.</p><button className="primary wide" onClick={onGetApp}>Open mobile app</button></div><button className="danger-button wide" onClick={onSignOut}>Sign out</button></aside></div></div>;
 }
 
 function MemberNotificationSettings({ token, profile, onProfile, onBack, notify }: { token: string; profile: MemberProfile; onProfile: (profile: MemberProfile) => void; onBack: () => void; notify: (message: string) => void }) {
