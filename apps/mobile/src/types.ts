@@ -31,7 +31,10 @@ export type Accessory = {
 export type User = {
   id: string;
   name: string;
+  username: string;
   email: string;
+  avatarDataUrl: string | null;
+  linkedAccounts: Array<{ provider: OAuthProvider; subject: string; email: string }>;
   mascotName: string;
   mascotType: MascotType;
   wristbandColor: WristbandColor;
@@ -49,6 +52,8 @@ export type User = {
   dailyQuests: DailyQuest[];
   coupons: RedeemedCoupon[];
 };
+
+export type OAuthProvider = 'google' | 'discord' | 'microsoft';
 
 export type NotificationPreferences = { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
 

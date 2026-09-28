@@ -15,6 +15,9 @@ updates:
         dependency-type: development
     labels:
       - dependencies
+    commit-message:
+      prefix: deps
+      include: scope
 
   - package-ecosystem: github-actions
     directory: /
@@ -27,3 +30,6 @@ updates:
     labels:
       - dependencies
       - github-actions
+    commit-message:
+      prefix: ci
+      include: scope

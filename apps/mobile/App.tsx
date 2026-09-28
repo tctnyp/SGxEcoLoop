@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
+import * as WebBrowser from 'expo-web-browser';
 import { useFonts } from 'expo-font';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, View } from 'react-native';
@@ -20,6 +21,9 @@ import {
   getWristbandPickupLocations,
   revokeSession,
   restoreMobileSession,
+  startLinkedAccount,
+  updateMemberProfile,
+  changeMemberPassword,
   updateNotificationPreferences,
   unpairWristband,
 } from './src/api';
@@ -28,7 +32,7 @@ import { HomeScreen } from './src/screens/HomeScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
 import { PairWristbandScreen } from './src/screens/PairWristbandScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
-import { AccessoryId, AuthResult, Screen, User } from './src/types';
+import { AccessoryId, AuthResult, OAuthProvider, Screen, User } from './src/types';
 import { colors } from './src/theme';
 
 const SESSION_KEY = 'novo-mobile-session';
@@ -263,6 +267,30 @@ export default function App() {
     await saveUser(await updateNotificationPreferences(requireToken(), preferences));
   };
 
+  const handleUpdateProfile = async (input: { name: string; username: string; avatarDataUrl?: string | null }) => {
+    const updated = await updateMemberProfile(requireToken(), input);
+    await saveUser(updated);
+    return updated;
+  };
+
+  const handleChangePassword = (input: { currentPassword: string; newPassword: string }) => changeMemberPassword(requireToken(), input);
+
+  const handleLinkAccount = async (provider: OAuthProvider) => {
+    const authorizationUrl = await startLinkedAccount(requireToken(), provider);
+    const result = await WebBrowser.openAuthSessionAsync(authorizationUrl, 'novo://auth/oauth');
+    if (result.type !== 'success') throw new Error('Account linking was cancelled.');
+    const url = new URL(result.url);
+    const oauthError = url.searchParams.get('oauthError');
+    if (oauthError) throw new Error(oauthError);
+    const nextToken = url.searchParams.get('token');
+    if (!nextToken) throw new Error('The provider did not return a novo session.');
+    await rememberSession(nextToken);
+    const session = await restoreMobileSession(nextToken);
+    if (!session.user) throw new Error('The updated profile could not be loaded.');
+    await saveUser(session.user);
+    return session.user;
+  };
+
   const handleContribute = async (points: number, causeId: string, causeName: string) => {
     try {
       await saveUser(await contributePoints(requireToken(), points, causeId, causeName));
@@ -312,7 +340,7 @@ export default function App() {
       {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
       {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
-      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
+      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
     </SafeAreaProvider>
   );
 }

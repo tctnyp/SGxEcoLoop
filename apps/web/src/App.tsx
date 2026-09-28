@@ -6,8 +6,16 @@ type AccountRole = 'member' | Role;
 type Page = 'overview' | 'events' | 'checkin' | 'reviews' | 'nfc' | 'tasks' | 'market' | 'accounts';
 type MemberPage = 'home' | 'market' | 'tasks' | 'friends' | 'settings';
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
-type MemberProfile = { id: string; name: string; email: string; mascotName: string; mascotType: 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird'; wristbandColor: string; wristbandPaired: boolean; wristbandPickupLocation: string | null; accessories: AccessoryId[]; equippedAccessories: AccessoryId[]; friendIds: string[]; notificationPreferences: { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean }; streak: number; points: number; lifetimePoints: number; lastWristbandTapAt: string | null; questBoardDate: string | null; dailyQuests: Array<{ id: string; title: string; description: string; points: number; completed: boolean }> };
+type MemberProfile = { id: string; name: string; username: string; email: string; avatarDataUrl: string | null; linkedAccounts: Array<{ provider: 'google' | 'discord' | 'microsoft'; subject: string; email: string }>; mascotName: string; mascotType: 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird'; wristbandColor: string; wristbandPaired: boolean; wristbandPickupLocation: string | null; accessories: AccessoryId[]; equippedAccessories: AccessoryId[]; friendIds: string[]; notificationPreferences: { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean }; streak: number; points: number; lifetimePoints: number; lastWristbandTapAt: string | null; questBoardDate: string | null; dailyQuests: Array<{ id: string; title: string; description: string; points: number; completed: boolean }> };
 type Identity = { token: string; account: { id: string; name: string; email: string; role: AccountRole }; role: AccountRole; handoffToken?: string; member?: MemberProfile };
+
+const passwordRules = [
+  { label: '9 or more characters', test: (value: string) => value.length >= 9 },
+  { label: 'One letter and one number', test: (value: string) => /[A-Za-z]/.test(value) && /\d/.test(value) },
+  { label: 'Uppercase and lowercase letters', test: (value: string) => /[A-Z]/.test(value) && /[a-z]/.test(value) },
+  { label: 'One special character', test: (value: string) => /[^A-Za-z0-9]/.test(value) },
+];
+const strongPassword = (value: string) => passwordRules.every((rule) => rule.test(value));
 
 const accessoryCatalog: { id: AccessoryId; name: string; category: string; rarity: string; tone: string; color: string; primary: string; deep: string; soft: string; secondary: string }[] = [
   { id: 'bright-star', name: 'Bright star', category: 'Badge', rarity: 'Rare', tone: 'lime', color: '#F8F5B7', primary: '#F5E94B', deep: '#3D3A12', soft: '#FFFDEA', secondary: '#F3D95C' },
@@ -292,6 +300,8 @@ type AccessMode = 'signin' | 'signup' | 'forgot' | 'reset';
 
 function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identity) => void }) {
   const parameters = new URLSearchParams(window.location.search);
+  const inviteUserId = window.location.pathname.match(/^\/invite\/([^/]+)\/?$/)?.[1] ?? '';
+  const inviteDeepLink = inviteUserId ? `novo://friends/add?user=${encodeURIComponent(decodeURIComponent(inviteUserId))}` : '';
   const [mode, setMode] = useState<AccessMode>(parameters.has('reset') ? 'reset' : parameters.has('oauthNew') ? 'signup' : 'signin');
   const [name, setName] = useState(parameters.get('name') ?? '');
   const [email, setEmail] = useState('');
@@ -300,7 +310,7 @@ function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identit
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
-  const [providers, setProviders] = useState({ google: false, discord: false });
+  const [providers, setProviders] = useState({ google: false, discord: false, microsoft: false });
   const resetToken = parameters.get('reset') ?? '';
 
   useEffect(() => {
@@ -310,7 +320,7 @@ function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identit
     if (oauthError) setError(oauthError);
     const oauthToken = parameters.get('oauthToken');
     window.history.replaceState({}, '', window.location.pathname);
-    fetch('/api/auth/providers').then((response) => response.json()).then((value: { google?: boolean; discord?: boolean }) => setProviders({ google: Boolean(value.google), discord: Boolean(value.discord) })).catch(() => undefined);
+    fetch('/api/auth/providers').then((response) => response.json()).then((value: { google?: boolean; discord?: boolean; microsoft?: boolean }) => setProviders({ google: Boolean(value.google), discord: Boolean(value.discord), microsoft: Boolean(value.microsoft) })).catch(() => undefined);
     if (!oauthToken) return;
     setBusy(true);
     fetch('/api/auth/session', { headers: { Authorization: `Bearer ${oauthToken}` } })
@@ -323,12 +333,22 @@ function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identit
       .finally(() => setBusy(false));
   }, []);
 
+  useEffect(() => {
+    if (!inviteDeepLink || !/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) return;
+    const key = `novo-invite-attempt:${inviteUserId}`;
+    if (window.sessionStorage.getItem(key)) return;
+    window.sessionStorage.setItem(key, '1');
+    const timeout = window.setTimeout(() => window.location.assign(inviteDeepLink), 180);
+    return () => window.clearTimeout(timeout);
+  }, [inviteDeepLink, inviteUserId]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError('');
     setMessage('');
     try {
+      if ((mode === 'signup' || mode === 'reset') && !strongPassword(password)) throw new Error(passwordRules.find((rule) => !rule.test(password))?.label ?? 'Password does not meet the requirements.');
       if ((mode === 'signup' || mode === 'reset') && password !== confirmPassword) throw new Error('Passwords do not match.');
       const path = mode === 'signin' ? '/api/auth/web-sign-in' : mode === 'signup' ? '/api/auth/register' : mode === 'forgot' ? '/api/auth/request-password-reset' : '/api/auth/reset-password';
       const body = mode === 'signin' ? { email, password }
@@ -359,11 +379,11 @@ function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identit
     : mode === 'forgot'
       ? { eyebrow: 'ACCOUNT RECOVERY', title: 'Reset your password', subtitle: 'We’ll email a secure link to your verified address.' }
       : mode === 'reset'
-        ? { eyebrow: 'CHOOSE A NEW PASSWORD', title: 'Set your password', subtitle: 'Use at least eight characters.' }
+        ? { eyebrow: 'CHOOSE A NEW PASSWORD', title: 'Set your password', subtitle: 'Use a strong, unique password.' }
         : { eyebrow: 'WELCOME BACK', title: 'Sign in to novo', subtitle: 'Continue to your member or Operations workspace.' };
 
   const changeMode = (next: AccessMode) => { setMode(next); setError(''); setMessage(''); setPassword(''); setConfirmPassword(''); };
-  return <div className="access-page auth-reference"><section className="auth-card"><form className="login-inner auth-form" onSubmit={submit}><Logo operations={false}/><div className="auth-heading"><p className="eyebrow">{copy.eyebrow}</p><h2>{copy.title}</h2><p className="muted">{copy.subtitle}</p></div>{mode === 'signup' && <label className="auth-field"><span>Name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name"/></label>}{mode !== 'reset' && <label className="auth-field"><span>Email address</span><input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/></label>}{(mode === 'signin' || mode === 'signup' || mode === 'reset') && <label className="auth-field"><span>{mode === 'reset' ? 'New password' : 'Password'}</span><input type="password" required minLength={8} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters"/></label>}{(mode === 'signup' || mode === 'reset') && <label className="auth-field"><span>Confirm password</span><input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter it again"/></label>}{mode === 'signin' && <button className="auth-link" type="button" onClick={() => changeMode('forgot')}>Forgot password?</button>}{error && <p className="auth-error" role="alert">{error}</p>}{message && <p className="auth-success" role="status">{message}</p>}<button className="primary wide" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Update password'}<Icon name="arrow" /></button>{mode === 'signin' && (providers.google || providers.discord) && <><div className="login-divider">or continue with</div><div className="social-auth">{providers.google && <a href="/api/auth/google/start?platform=web">Google</a>}{providers.discord && <a href="/api/auth/discord/start?platform=web">Discord</a>}</div></>}{mode === 'signin' ? <p className="auth-switch">New to novo? <button type="button" onClick={() => changeMode('signup')}>Create an account</button></p> : <p className="auth-switch"><button type="button" onClick={() => changeMode('signin')}>Back to sign in</button></p>}<p className="legal">Secure access · Your permissions follow your verified account</p></form><aside className="auth-visual" aria-hidden="true"><div className="auth-visual-glow"/><img src="/novo-icon.png" alt=""/><div className="auth-visual-copy"><span>novo</span><b>Small actions.<br/>Visible impact.</b></div></aside></section></div>;
+  return <div className="access-page auth-reference"><section className="auth-card"><form className="login-inner auth-form" onSubmit={submit}><Logo operations={false}/><div className="auth-heading"><p className="eyebrow">{copy.eyebrow}</p><h2>{copy.title}</h2><p className="muted">{copy.subtitle}</p></div>{mode === 'signup' && <label className="auth-field"><span>Name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name"/></label>}{mode !== 'reset' && <label className="auth-field"><span>Email address</span><input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/></label>}{(mode === 'signin' || mode === 'signup' || mode === 'reset') && <label className="auth-field"><span>{mode === 'reset' ? 'New password' : 'Password'}</span><input type="password" required minLength={mode === 'signin' ? 6 : 9} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'signin' ? 'Your password' : '9+ characters'}/></label>}{(mode === 'signup' || mode === 'reset') && <><label className="auth-field"><span>Confirm password</span><input type="password" required minLength={9} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter it again"/></label><div className="password-rules" aria-live="polite">{passwordRules.map((rule) => <span className={rule.test(password) ? 'met' : ''} key={rule.label}>{rule.test(password) ? '✓' : '○'} {rule.label}</span>)}<span className={confirmPassword && password === confirmPassword ? 'met' : ''}>{confirmPassword && password === confirmPassword ? '✓' : '○'} Passwords match</span></div></>}{mode === 'signin' && <button className="auth-link" type="button" onClick={() => changeMode('forgot')}>Forgot password?</button>}{error && <p className="auth-error" role="alert">{error}</p>}{message && <p className="auth-success" role="status">{message}</p>}<button className="primary wide" type="submit" disabled={busy || ((mode === 'signup' || mode === 'reset') && (!strongPassword(password) || password !== confirmPassword))}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Update password'}<Icon name="arrow" /></button>{mode === 'signin' && (providers.google || providers.discord || providers.microsoft) && <><div className="login-divider">or continue with</div><div className="social-auth">{providers.google && <a href="/api/auth/google/start?platform=web">Google</a>}{providers.discord && <a href="/api/auth/discord/start?platform=web">Discord</a>}{providers.microsoft && <a href="/api/auth/microsoft/start?platform=web">Microsoft</a>}</div></>}{mode === 'signin' ? <p className="auth-switch">New to novo? <button type="button" onClick={() => changeMode('signup')}>Create an account</button></p> : <p className="auth-switch"><button type="button" onClick={() => changeMode('signin')}>Back to sign in</button></p>}<p className="legal">Secure access · Your permissions follow your verified account</p></form><aside className="auth-visual" aria-hidden="true"><div className="auth-visual-glow"/><img src="/novo-icon.png" alt=""/><div className="auth-visual-copy"><span>novo</span><b>Small actions.<br/>Visible impact.</b></div></aside></section></div>;
 }
 
 function DownloadExperience({ identity, onBack, onSignOut }: { identity: Identity; onBack?: () => void; onSignOut: () => void }) {
@@ -375,7 +395,7 @@ function DownloadExperience({ identity, onBack, onSignOut }: { identity: Identit
 
 function MemberWeb({ identity, onGetApp, onSignOut }: { identity: Identity; onGetApp: () => void; onSignOut: () => void }) {
   const [active, setActive] = useState<MemberPage>('home');
-  const fallback: MemberProfile = { id: identity.account.id, name: identity.account.name, email: identity.account.email, mascotName: '', mascotType: 'polar-bear', wristbandColor: 'snowy-white', wristbandPaired: false, wristbandPickupLocation: null, accessories: [], equippedAccessories: [], friendIds: [], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 0, points: 0, lifetimePoints: 0, lastWristbandTapAt: null, questBoardDate: null, dailyQuests: [] };
+  const fallback: MemberProfile = { id: identity.account.id, name: identity.account.name, username: identity.account.email.split('@')[0] || 'member', email: identity.account.email, avatarDataUrl: null, linkedAccounts: [], mascotName: '', mascotType: 'polar-bear', wristbandColor: 'snowy-white', wristbandPaired: false, wristbandPickupLocation: null, accessories: [], equippedAccessories: [], friendIds: [], notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true }, streak: 0, points: 0, lifetimePoints: 0, lastWristbandTapAt: null, questBoardDate: null, dailyQuests: [] };
   const [profile, setProfile] = useState<MemberProfile>(identity.member ?? fallback);
   const [closetOpen, setClosetOpen] = useState(false);
   const [notice, setNotice] = useState('');
@@ -499,9 +519,10 @@ function MemberTasks({ token }: { token: string }) {
 function MemberFriends({ token, inviteUrl, onCopy }: { token: string; inviteUrl: string; onCopy: () => void }) {
   const [friends, setFriends] = useState<Array<{ id: string; name: string; mascotName: string; lifetimePoints: number }>>([]);
   const [inviteQr, setInviteQr] = useState('');
+  const [qrExpanded, setQrExpanded] = useState(false);
   useEffect(() => { fetch('/api/member/friends', { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.json()).then((result) => setFriends(result.friends ?? [])).catch(() => setFriends([])); }, [token]);
   useEffect(() => { QRCode.toDataURL(inviteUrl, { width: 180, margin: 1, color: { dark: '#17352A', light: '#FFFFFF' } }).then(setInviteQr).catch(() => setInviteQr('')); }, [inviteUrl]);
-  return <div className="member-page"><div className="member-page-title"><div><p className="eyebrow">YOUR CIRCLE</p><h1>Friends</h1><p>Invite friends and keep your connected circle close.</p></div><button className="primary" onClick={onCopy}><Icon name="plus"/>Invite a friend</button></div><section className="invite-banner"><div className="invite-qr">{inviteQr ? <img src={inviteQr} alt="QR code for your friend invite"/> : <QrPattern/>}</div><div><p className="eyebrow">YOUR PRIVATE INVITE</p><h2>Grow your circle.</h2><p>Your invite is a normal web link that opens novo in any browser.</p><a className="invite-url" href={inviteUrl}>{inviteUrl}</a><button className="soft-button" onClick={onCopy}>Copy invite link</button></div><span className="friend-orbit">✦</span></section><div className="section-heading member-friend-heading"><h2>Your friends</h2><span>{friends.length} friends</span></div><div className="friend-card-grid">{friends.map((friend, index) => <article key={friend.id}><div className={`friend-plushie ${['lime','lavender','peach'][index % 3]}`}/><h3>{friend.mascotName}</h3><p>{friend.name}</p><div><span>{friend.lifetimePoints.toLocaleString()} lifetime leaves</span></div></article>)}</div>{!friends.length && <p className="supporting-copy">No friends yet. Share your invite to grow your circle.</p>}</div>;
+  return <div className="member-page"><div className="member-page-title"><div><p className="eyebrow">YOUR CIRCLE</p><h1>Friends</h1><p>Invite friends and keep your connected circle close.</p></div><button className="primary" onClick={onCopy}><Icon name="plus"/>Invite a friend</button></div><section className="invite-banner"><button type="button" className="invite-qr" onClick={() => setQrExpanded(true)} aria-label="Enlarge friend invite QR code">{inviteQr ? <img src={inviteQr} alt="QR code for your friend invite"/> : <QrPattern/>}</button><div><p className="eyebrow">YOUR PRIVATE INVITE</p><h2>Grow your circle.</h2><p>Your app-first invite opens novo when installed and keeps this website as its fallback. Tap the QR to enlarge it.</p><a className="invite-url" href={inviteUrl}>{inviteUrl}</a><button className="soft-button" onClick={onCopy}>Copy invite link</button></div><span className="friend-orbit">✦</span></section><div className="section-heading member-friend-heading"><h2>Your friends</h2><span>{friends.length} friends</span></div><div className="friend-card-grid">{friends.map((friend, index) => <article key={friend.id}><div className={`friend-plushie ${['lime','lavender','peach'][index % 3]}`}/><h3>{friend.mascotName}</h3><p>{friend.name}</p><div><span>{friend.lifetimePoints.toLocaleString()} lifetime leaves</span></div></article>)}</div>{!friends.length && <p className="supporting-copy">No friends yet. Share your invite to grow your circle.</p>}{qrExpanded && <div className="qr-lightbox" role="dialog" aria-modal="true" aria-label="Expanded friend invite QR code" onClick={() => setQrExpanded(false)}><button type="button" aria-label="Close expanded QR code">×</button><div>{inviteQr ? <img src={inviteQr} alt="Expanded QR code for your friend invite"/> : <QrPattern/>}<b>Scan to open novo</b><p>The app opens when installed, with the website as fallback.</p></div></div>}</div>;
 }
 
 function MemberSettings({ identity, profile, onProfile, onGetApp, onSignOut, notify }: { identity: Identity; profile: MemberProfile; onProfile: (profile: MemberProfile) => void; onGetApp: () => void; onSignOut: () => void; notify: (message: string) => void }) {

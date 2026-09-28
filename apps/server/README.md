@@ -12,7 +12,9 @@ Important configuration:
 - `NOVO_DB_HOST`, `NOVO_DB_PORT`, `NOVO_DB_NAME`, `NOVO_DB_USER`, `NOVO_DB_PASSWORD`: MariaDB connection settings.
 - `NOVO_DB_PATH`: alternate SQLite location when the SQLite driver is selected.
 - `GOOGLE_*_CLIENT_ID` / `GOOGLE_CLIENT_IDS`: accepted Google ID-token audiences.
-- `GOOGLE_WEB_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`: web/mobile OAuth configuration. Register callback URLs as `${PUBLIC_APP_URL}/api/auth/google/callback` and `${PUBLIC_APP_URL}/api/auth/discord/callback`.
+- `GOOGLE_WEB_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, and `DISCORD_CLIENT_SECRET`: Google and Discord web/mobile OAuth configuration.
+- `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and `MICROSOFT_TENANT_ID`: Microsoft OAuth configuration. The tenant defaults to `common`, which supports both work/school and personal Microsoft accounts when the app registration allows them.
+- Register each provider callback as `${PUBLIC_APP_URL}/api/auth/<provider>/callback`. Microsoft must use the Web platform redirect, even for Android and iOS, because the server completes OAuth before returning to the novo app.
 - `PUBLIC_APP_URL`: public environment URL used for OAuth callbacks, password resets, and invite links.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USER`, `SMTP_PASSWORD`: password-reset mail transport. The VPS defaults to local SMTP on port 25.
 - `NOVO_BOOTSTRAP_PASSWORD`: optional one-time password applied only to configured operations accounts that do not already have a credential.

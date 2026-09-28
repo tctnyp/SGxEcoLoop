@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { AccessoryId, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, TaskSubmission, User, WeeklyCompetition } from './types';
+import { AccessoryId, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from './types';
 
 const PRODUCTION_API_URL = 'https://novo.tancheetiong.com/api';
 
@@ -119,6 +119,10 @@ export function restoreMobileSession(token: string): Promise<AuthResult> {
   return request<AuthResult>('/auth/mobile-session', undefined, token);
 }
 
+export function getAuthProviders(): Promise<Record<OAuthProvider, boolean>> {
+  return request<Record<OAuthProvider, boolean>>('/auth/providers');
+}
+
 export function revokeSession(token: string): Promise<void> {
   return request<void>('/auth/sign-out', { method: 'POST' }, token);
 }
@@ -126,6 +130,20 @@ export function revokeSession(token: string): Promise<void> {
 export async function getMemberProfile(token: string): Promise<User> {
   const result = await request<{ user: User }>('/member/profile', undefined, token);
   return result.user;
+}
+
+export async function updateMemberProfile(token: string, input: { name: string; username: string; avatarDataUrl?: string | null }): Promise<User> {
+  const result = await request<{ user: User }>('/member/profile', { method: 'PATCH', body: JSON.stringify(input) }, token);
+  return result.user;
+}
+
+export async function changeMemberPassword(token: string, input: { currentPassword: string; newPassword: string }): Promise<void> {
+  await request<{ message: string }>('/member/password', { method: 'POST', body: JSON.stringify(input) }, token);
+}
+
+export async function startLinkedAccount(token: string, provider: OAuthProvider): Promise<string> {
+  const result = await request<{ authorizationUrl: string }>(`/member/oauth/${provider}/link`, { method: 'POST' }, token);
+  return result.authorizationUrl;
 }
 
 export async function pairWristband(token: string, tagToken: string, pickupLocation: string): Promise<User> {

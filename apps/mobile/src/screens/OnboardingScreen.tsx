@@ -10,6 +10,7 @@ import { TextField } from '../components/TextField';
 import { Text } from '../components/Typography';
 import { colors } from '../theme';
 import { AuthResult } from '../types';
+import { isStrongPassword, PASSWORD_REQUIREMENTS, passwordIssue } from '../password';
 
 type Props = {
   draft?: { name: string; email: string };
@@ -41,7 +42,8 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
     setLoading(true);
     setError('');
     try {
-      if (password.length < 8) throw new Error('Use at least 8 characters for your password.');
+      const issue = passwordIssue(password);
+      if (issue) throw new Error(issue);
       if (password !== confirmPassword) throw new Error('Passwords do not match.');
       await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), password, mascotName: normalizedMascotName, focus }));
     } catch (reason) {
@@ -77,11 +79,12 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                 <View style={styles.fields}>
                   <TextField label="Your name" value={name} onChangeText={setName} placeholder="What should we call you?" icon="person-outline" />
                   <TextField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" icon="mail-outline" />
-                  <TextField label="Password" value={password} onChangeText={setPassword} placeholder="At least 8 characters" secure icon="lock-closed-outline" />
+                  <TextField label="Password" value={password} onChangeText={setPassword} placeholder="9+ characters" secure icon="lock-closed-outline" />
                   <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Enter it again" secure icon="shield-checkmark-outline" />
+                  <View style={styles.passwordChecklist}>{PASSWORD_REQUIREMENTS.map((requirement) => { const met = requirement.test(password); return <View key={requirement.key} style={styles.passwordRequirement}><Ionicons name={met ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={met ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, met && styles.passwordRequirementMet]}>{requirement.label}</Text></View>; })}<View style={styles.passwordRequirement}><Ionicons name={confirmPassword && password === confirmPassword ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={confirmPassword && password === confirmPassword ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, Boolean(confirmPassword && password === confirmPassword) && styles.passwordRequirementMet]}>Passwords match</Text></View></View>
                   <TextField label="Mascot name" value={mascotName} onChangeText={setMascotName} placeholder="Name your in-app mascot" icon="leaf-outline" />
                 </View>
-                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@') || password.length < 8 || password !== confirmPassword} icon="arrow-forward" />
+                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@') || !isStrongPassword(password) || password !== confirmPassword} icon="arrow-forward" />
               </>
             ) : (
               <>
@@ -136,6 +139,10 @@ const styles = StyleSheet.create({
   title: { color: colors.ink, fontSize: 34, lineHeight: 40, fontWeight: '900', letterSpacing: -1.3 },
   body: { color: colors.inkMuted, fontSize: 16, lineHeight: 23, marginBottom: 8 },
   fields: { gap: 15, marginVertical: 6 },
+  passwordChecklist: { gap: 6, paddingHorizontal: 4 },
+  passwordRequirement: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  passwordRequirementText: { color: colors.inkMuted, fontSize: 12, lineHeight: 16 },
+  passwordRequirementMet: { color: colors.forest, fontWeight: '700' },
   choices: { gap: 12, marginVertical: 8 },
   choice: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.outline, borderRadius: 22, padding: 13 },
   choiceSelected: { borderColor: colors.forest, backgroundColor: '#F4FBE3' },

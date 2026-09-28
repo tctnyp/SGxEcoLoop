@@ -3,7 +3,7 @@
     "name": "novo",
     "slug": "novo",
     "scheme": "novo",
-    "version": "1.1.5",
+    "version": "1.1.6",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -15,13 +15,17 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "13",
+      "buildNumber": "14",
       "icon": "./assets/icon.png",
-      "bundleIdentifier": "com.novo.ecoloop"
+      "bundleIdentifier": "com.novo.ecoloop",
+      "associatedDomains": [
+        "applinks:novo.tancheetiong.com",
+        "applinks:novodev.tancheetiong.com"
+      ]
     },
     "android": {
       "package": "com.novo.ecoloop",
-      "versionCode": 13,
+      "versionCode": 14,
       "permissions": [
         "android.permission.NFC",
         "android.permission.CAMERA",
@@ -32,7 +36,18 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#17352A"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            { "scheme": "https", "host": "novo.tancheetiong.com", "pathPrefix": "/invite/" },
+            { "scheme": "https", "host": "novodev.tancheetiong.com", "pathPrefix": "/invite/" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "plugins": [
       [

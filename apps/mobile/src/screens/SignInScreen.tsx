@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import * as WebBrowser from 'expo-web-browser';
 import { Keyboard, KeyboardAvoidingView, LayoutChangeEvent, Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { API_URL, checkEmailStatus, requestPasswordReset, restoreMobileSession, signIn } from '../api';
+import { API_URL, checkEmailStatus, getAuthProviders, requestPasswordReset, restoreMobileSession, signIn } from '../api';
 import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
 import { Plushie } from '../components/Plushie';
 import { TextField } from '../components/TextField';
 import { Text } from '../components/Typography';
 import { colors } from '../theme';
-import { AuthResult } from '../types';
+import { AuthResult, OAuthProvider } from '../types';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -30,7 +30,8 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const [heroCopyFrame, setHeroCopyFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [plushieFrame, setPlushieFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState<'email' | 'password' | 'google' | 'discord' | 'reset' | null>(null);
+  const [loading, setLoading] = useState<'email' | 'password' | OAuthProvider | 'reset' | null>(null);
+  const [providers, setProviders] = useState<Record<OAuthProvider, boolean>>({ google: true, discord: true, microsoft: false });
   const captureFrame = (setter: typeof setHeroCopyFrame) => (event: LayoutChangeEvent) => setter(event.nativeEvent.layout);
   const constrained = !wide && (keyboardVisible || height < 620);
   const compactPlushieScale = constrained ? 0.5 : short ? 0.58 : 0.72;
@@ -55,6 +56,8 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
       hidden.remove();
     };
   }, []);
+
+  useEffect(() => { getAuthProviders().then(setProviders).catch(() => undefined); }, []);
 
   useEffect(() => {
     setHeroCopyFrame({ x: 0, y: 0, width: 0, height: 0 });
@@ -92,11 +95,11 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
     }
   };
 
-  const handleOAuthProvider = async (provider: 'google' | 'discord') => {
+  const handleOAuthProvider = async (provider: OAuthProvider) => {
     setError('');
     setLoading(provider);
     try {
-      const label = provider === 'google' ? 'Google' : 'Discord';
+      const label = provider === 'google' ? 'Google' : provider === 'discord' ? 'Discord' : 'Microsoft';
       const result = await WebBrowser.openAuthSessionAsync(`${API_URL}/auth/${provider}/start?platform=mobile`, 'novo://auth/oauth');
       if (result.type !== 'success') throw new Error(result.type === 'cancel' || result.type === 'dismiss' ? `${label} sign-in was cancelled.` : `${label} sign-in did not complete.`);
       const url = new URL(result.url);
@@ -115,7 +118,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
       }
       throw new Error(`${label} did not return a novo session.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : `${provider === 'google' ? 'Google' : 'Discord'} sign in did not work.`);
+      setError(err instanceof Error ? err.message : `${provider === 'google' ? 'Google' : provider === 'discord' ? 'Discord' : 'Microsoft'} sign in did not work.`);
     } finally {
       setLoading(null);
     }
@@ -123,6 +126,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
   const handleGoogle = () => handleOAuthProvider('google');
   const handleDiscord = () => handleOAuthProvider('discord');
+  const handleMicrosoft = () => handleOAuthProvider('microsoft');
 
   const handlePasswordReset = async () => {
     const normalizedEmail = (email ?? '').trim();
@@ -170,7 +174,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
             <View style={styles.form}>
               {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
-                {!constrained && <><View style={styles.socialButtons}><Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/><Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/></View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
+                {!constrained && <><View style={styles.socialButtons}>{providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/>} {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/>} {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'}/>}</View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
                 <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
                 {!constrained && <View style={styles.signupRow}>
@@ -243,7 +247,7 @@ const styles = StyleSheet.create({
   title: { color: colors.ink, fontSize: 29, lineHeight: 34, fontWeight: '900', letterSpacing: -1.2 },
   subtitle: { color: colors.inkMuted, fontSize: 14, lineHeight: 20, marginTop: 3 },
   form: { gap: 10 },
-  socialButtons: { flexDirection: 'row', gap: 9 },
+  socialButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 2 },
   line: { flex: 1, height: 1, backgroundColor: colors.outline },
   or: { color: colors.inkMuted, fontSize: 14, fontWeight: '600' },

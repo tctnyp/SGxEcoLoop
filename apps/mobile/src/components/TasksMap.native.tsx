@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Text } from './Typography';
@@ -42,7 +42,13 @@ function mapDocument(locations: NovoLocation[], events: NovoEvent[], userLocatio
       var userLocation = ${userData};
       var map = new maplibregl.Map({ container: 'map', style: 'https://tiles.openfreemap.org/styles/positron', center: userLocation ? [userLocation.longitude, userLocation.latitude] : [103.8198, 1.3521], zoom: userLocation ? 13.6 : 10.45, attributionControl: false });
       function markerShell(child, size) { var shell = document.createElement('span'); shell.className = 'marker-shell'; shell.style.width = size + 'px'; shell.style.height = size + 'px'; shell.appendChild(child); return shell; }
-      if (userLocation) { var userMarker = document.createElement('span'); userMarker.className = 'user-marker'; new maplibregl.Marker({ element: markerShell(userMarker, 39), anchor: 'center' }).setLngLat([userLocation.longitude, userLocation.latitude]).addTo(map); }
+      var userMarkerInstance = null;
+      window.updateUserLocation = function (latitude, longitude, focus) {
+        if (!userMarkerInstance) { var userMarker = document.createElement('span'); userMarker.className = 'user-marker'; userMarkerInstance = new maplibregl.Marker({ element: markerShell(userMarker, 39), anchor: 'center' }).setLngLat([longitude, latitude]).addTo(map); }
+        else userMarkerInstance.setLngLat([longitude, latitude]);
+        if (focus) map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 14), duration: 700 });
+      };
+      if (userLocation) window.updateUserLocation(userLocation.latitude, userLocation.longitude, true);
       function escapeHtml(value) { return String(value).replace(/[&<>"']/g, function (character) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]; }); }
       var returnPointData = { type: 'FeatureCollection', features: locations.map(function (location) { return { type: 'Feature', geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] }, properties: { id: location.id, name: location.name, address: location.address } }; }) };
       map.on('load', function () {
@@ -70,9 +76,20 @@ function mapDocument(locations: NovoLocation[], events: NovoEvent[], userLocatio
 }
 
 export const TasksMap = memo(function TasksMap({ locations, events, userLocation, focusUser = 0, onEventPress }: { locations: NovoLocation[]; events: NovoEvent[]; userLocation?: { latitude: number; longitude: number } | null; focusUser?: number; onEventPress?: (eventId: string) => void }) {
-  const html = useMemo(() => mapDocument(locations, events, userLocation), [locations, events, userLocation, focusUser]);
+  const webViewRef = useRef<WebView>(null);
+  const lastFocusRef = useRef(focusUser);
+  const html = useMemo(() => mapDocument(locations, events, null), [locations, events]);
   const source = useMemo(() => ({ html }), [html]);
-  return <View style={styles.mapBackdrop}><WebView source={source} originWhitelist={['about:*', 'https://*']} onMessage={(message) => { try { const payload = JSON.parse(message.nativeEvent.data) as { type?: string; eventId?: string }; if (payload.type === 'event' && payload.eventId) onEventPress?.(payload.eventId); } catch { /* Ignore messages not created by the map. */ } }} javaScriptEnabled domStorageEnabled mixedContentMode="never" setSupportMultipleWindows={false} startInLoadingState renderLoading={() => <View style={styles.loading}><ActivityIndicator color="#17352A" /><Text style={styles.loadingText}>Loading live map…</Text></View>} renderError={() => <View style={styles.loading}><Text style={styles.errorTitle}>Map unavailable</Text><Text style={styles.loadingText}>Check your connection and reopen Tasks.</Text></View>} style={styles.map} /></View>;
+  const sendLocation = (focus: boolean) => {
+    if (!userLocation) return;
+    webViewRef.current?.injectJavaScript(`window.updateUserLocation && window.updateUserLocation(${userLocation.latitude},${userLocation.longitude},${focus ? 'true' : 'false'});true;`);
+  };
+  useEffect(() => {
+    const shouldFocus = focusUser !== lastFocusRef.current;
+    lastFocusRef.current = focusUser;
+    sendLocation(shouldFocus);
+  }, [userLocation?.latitude, userLocation?.longitude, focusUser]);
+  return <View style={styles.mapBackdrop}><WebView ref={webViewRef} source={source} originWhitelist={['about:*', 'https://*']} onLoad={() => sendLocation(true)} onMessage={(message) => { try { const payload = JSON.parse(message.nativeEvent.data) as { type?: string; eventId?: string }; if (payload.type === 'event' && payload.eventId) onEventPress?.(payload.eventId); } catch { /* Ignore messages not created by the map. */ } }} javaScriptEnabled domStorageEnabled mixedContentMode="never" setSupportMultipleWindows={false} startInLoadingState renderLoading={() => <View style={styles.loading}><ActivityIndicator color="#17352A" /><Text style={styles.loadingText}>Loading live map…</Text></View>} renderError={() => <View style={styles.loading}><Text style={styles.errorTitle}>Map unavailable</Text><Text style={styles.loadingText}>Check your connection and reopen Tasks.</Text></View>} style={styles.map} /></View>;
 });
 
 const styles = StyleSheet.create({

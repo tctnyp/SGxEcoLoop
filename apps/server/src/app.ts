@@ -15,7 +15,10 @@ const users = new Map<string, User>();
 type User = {
   id: string;
   name: string;
+  username: string;
   email: string;
+  avatarDataUrl: string | null;
+  linkedAccounts: LinkedAccount[];
   mascotName: string;
   mascotType: MascotType;
   wristbandColor: WristbandColor;
@@ -33,6 +36,9 @@ type User = {
   dailyQuests: DailyQuest[];
   coupons: RedeemedCoupon[];
 };
+
+type OAuthProvider = 'google' | 'discord' | 'microsoft';
+type LinkedAccount = { provider: OAuthProvider; subject: string; email: string };
 
 type NotificationPreferences = { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
 
@@ -99,7 +105,7 @@ type MobileSession = { token: string; userId: string; expiresAt: number };
 type MobileHandoff = { token: string; userId: string; expiresAt: number; consumed: boolean };
 type Credential = { email: string; salt: string; passwordHash: string };
 type PasswordReset = { token: string; email: string; expiresAt: number; used: boolean };
-type OAuthAttempt = { provider: 'google' | 'discord'; platform: 'web' | 'mobile'; expiresAt: number };
+type OAuthAttempt = { provider: OAuthProvider; platform: 'web' | 'mobile'; expiresAt: number; linkUserId?: string };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -170,7 +176,10 @@ function createMember(input: { name: string; email: string; mascotName: string; 
   const user: User = {
     id: crypto.randomUUID(),
     name: input.name,
+    username: input.email.split('@')[0] || `member-${users.size + 1}`,
     email,
+    avatarDataUrl: null,
+    linkedAccounts: [],
     mascotName: input.mascotName,
     mascotType: 'polar-bear',
     wristbandColor: 'snowy-white',
@@ -269,6 +278,9 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
     user.dailyQuests ??= [];
     user.coupons ??= [];
     user.friendIds ??= [];
+    if (!user.username) { user.username = user.email.split('@')[0] || `member-${user.id.slice(0, 8)}`; changed = true; }
+    if (user.avatarDataUrl === undefined) { user.avatarDataUrl = null; changed = true; }
+    if (!Array.isArray(user.linkedAccounts)) { user.linkedAccounts = []; changed = true; }
     const uniqueFriendIds = [...new Set(user.friendIds)].filter((friendId) => friendId !== user.id);
     if (uniqueFriendIds.length !== user.friendIds.length) { user.friendIds = uniqueFriendIds; changed = true; }
     user.notificationPreferences ??= { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true };
@@ -356,10 +368,17 @@ const signInSchema = z.object({
 
 const emailStatusSchema = z.object({ email: z.string().email() });
 
+const strongPasswordSchema = z.string().min(9, 'Password must contain at least 9 characters.').max(128)
+  .regex(/[A-Za-z]/, 'Password must contain at least one letter.')
+  .regex(/\d/, 'Password must contain at least one number.')
+  .regex(/[A-Z]/, 'Password must contain at least one uppercase letter.')
+  .regex(/[a-z]/, 'Password must contain at least one lowercase letter.')
+  .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character.');
+
 const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
-  password: z.string().min(8).max(128).optional(),
+  password: strongPasswordSchema.optional(),
   mascotName: z.string().trim().min(1).max(30),
   focus: z.enum(['single-use', 'food', 'repair']),
 });
@@ -367,11 +386,17 @@ const onboardingSchema = z.object({
 const webRegistrationSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
-  password: z.string().min(8).max(128),
+  password: strongPasswordSchema,
   mascotName: z.string().trim().min(1).max(30).default('Nova'),
 });
 const passwordResetRequestSchema = z.object({ email: z.string().email() });
-const passwordResetSchema = z.object({ token: z.string().min(32).max(200), password: z.string().min(8).max(128) });
+const passwordResetSchema = z.object({ token: z.string().min(32).max(200), password: strongPasswordSchema });
+const memberProfileSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  username: z.string().trim().min(3).max(30).regex(/^[A-Za-z0-9._-]+$/, 'Username may only use letters, numbers, dots, underscores and hyphens.'),
+  avatarDataUrl: z.string().regex(/^data:image\/(jpeg|jpg|png|webp);base64,/).max(6_000_000).nullable().optional(),
+});
+const memberPasswordSchema = z.object({ currentPassword: z.string().max(128), newPassword: strongPasswordSchema });
 
 const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200), pickupLocation: z.string().trim().min(3).max(240).optional() });
 const pickupReservationSchema = z.object({ pickupLocation: z.string().trim().min(3).max(240) });
@@ -734,10 +759,52 @@ function oauthFailure(platform: OAuthAttempt['platform'], message: string) {
   return `${destination}?oauthError=${encodeURIComponent(message)}`;
 }
 
-async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: { email: string; name: string }) {
+function oauthCredentials(provider: OAuthProvider) {
+  if (provider === 'google') return { clientId: process.env.GOOGLE_WEB_CLIENT_ID, clientSecret: process.env.GOOGLE_CLIENT_SECRET, label: 'Google' };
+  if (provider === 'discord') return { clientId: process.env.DISCORD_CLIENT_ID, clientSecret: process.env.DISCORD_CLIENT_SECRET, label: 'Discord' };
+  return { clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, label: 'Microsoft' };
+}
+
+function oauthAuthorizationUrl(provider: OAuthProvider, state: string) {
+  const { clientId } = oauthCredentials(provider);
+  const parameters = new URLSearchParams({ client_id: clientId!, redirect_uri: oauthRedirectUri(provider), response_type: 'code', state });
+  if (provider === 'google') {
+    parameters.set('scope', 'openid email profile');
+    parameters.set('prompt', 'select_account');
+    return `https://accounts.google.com/o/oauth2/v2/auth?${parameters}`;
+  }
+  if (provider === 'discord') {
+    parameters.set('scope', 'identify email');
+    return `https://discord.com/oauth2/authorize?${parameters}`;
+  }
+  parameters.set('scope', 'openid profile email User.Read');
+  parameters.set('prompt', 'select_account');
+  return `https://login.microsoftonline.com/${encodeURIComponent(process.env.MICROSOFT_TENANT_ID || 'common')}/oauth2/v2.0/authorize?${parameters}`;
+}
+
+function createOAuthAttempt(provider: OAuthProvider, platform: OAuthAttempt['platform'], linkUserId?: string) {
+  const state = randomBytes(32).toString('hex');
+  oauthAttempts.set(state, { provider, platform, expiresAt: Date.now() + 10 * 60 * 1000, ...(linkUserId ? { linkUserId } : {}) });
+  for (const [key, attempt] of oauthAttempts) if (attempt.expiresAt <= Date.now()) oauthAttempts.delete(key);
+  return oauthAuthorizationUrl(provider, state);
+}
+
+async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: { email: string; name: string; subject: string }) {
   const email = profile.email.toLowerCase();
-  const account = findPortalAccountByEmail(email);
-  const user = users.get(email);
+  const linkedElsewhere = [...users.values()].find((candidate) => candidate.linkedAccounts.some((account) => account.provider === attempt.provider && account.subject === profile.subject));
+  if (attempt.linkUserId) {
+    const linkingUser = findUser(attempt.linkUserId);
+    if (!linkingUser) return response.redirect(oauthFailure(attempt.platform, 'The account-linking session expired.'));
+    if (linkedElsewhere && linkedElsewhere.id !== linkingUser.id) return response.redirect(oauthFailure(attempt.platform, `This ${oauthCredentials(attempt.provider).label} account is already linked to another novo account.`));
+    linkingUser.linkedAccounts = linkingUser.linkedAccounts.filter((account) => account.provider !== attempt.provider);
+    linkingUser.linkedAccounts.push({ provider: attempt.provider, subject: profile.subject, email });
+    const token = createMobileSession(linkingUser.id);
+    await persistDatabase(persistedCollections);
+    response.redirect(`novo://auth/oauth?token=${encodeURIComponent(token)}&linked=${encodeURIComponent(attempt.provider)}`);
+    return;
+  }
+  const account = linkedElsewhere ? portalAccounts.get(linkedElsewhere.id) : findPortalAccountByEmail(email);
+  const user = linkedElsewhere ?? users.get(email);
   if (!account || !user) {
     const destination = attempt.platform === 'mobile' ? 'novo://auth/oauth' : `${publicAppUrl()}/`;
     response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}`);
@@ -746,6 +813,9 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
   if (account.status !== 'active') {
     response.redirect(oauthFailure(attempt.platform, 'This account is not active.'));
     return;
+  }
+  if (!user.linkedAccounts.some((linked) => linked.provider === attempt.provider && linked.subject === profile.subject)) {
+    user.linkedAccounts.push({ provider: attempt.provider, subject: profile.subject, email });
   }
   if (attempt.platform === 'mobile') {
     const token = createMobileSession(user.id);
@@ -838,28 +908,17 @@ app.get('/api/auth/providers', (_request, response) => {
   response.json({
     google: Boolean(process.env.GOOGLE_WEB_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
     discord: Boolean(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET),
+    microsoft: Boolean(process.env.MICROSOFT_CLIENT_ID && process.env.MICROSOFT_CLIENT_SECRET),
   });
 });
 
 app.get('/api/auth/:provider/start', (request, response) => {
   const provider = routeParam(request.params.provider);
-  if (provider !== 'google' && provider !== 'discord') return response.status(404).json({ message: 'Unknown sign-in provider.' });
+  if (provider !== 'google' && provider !== 'discord' && provider !== 'microsoft') return response.status(404).json({ message: 'Unknown sign-in provider.' });
   const platform = request.query.platform === 'mobile' ? 'mobile' : 'web';
-  const clientId = provider === 'google' ? process.env.GOOGLE_WEB_CLIENT_ID : process.env.DISCORD_CLIENT_ID;
-  const clientSecret = provider === 'google' ? process.env.GOOGLE_CLIENT_SECRET : process.env.DISCORD_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return response.redirect(oauthFailure(platform, `${provider === 'google' ? 'Google' : 'Discord'} sign-in is not configured yet.`));
-  const state = randomBytes(32).toString('hex');
-  oauthAttempts.set(state, { provider, platform, expiresAt: Date.now() + 10 * 60 * 1000 });
-  for (const [key, attempt] of oauthAttempts) if (attempt.expiresAt <= Date.now()) oauthAttempts.delete(key);
-  const parameters = new URLSearchParams({ client_id: clientId, redirect_uri: oauthRedirectUri(provider), response_type: 'code', state });
-  if (provider === 'google') {
-    parameters.set('scope', 'openid email profile');
-    parameters.set('prompt', 'select_account');
-    response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${parameters}`);
-  } else {
-    parameters.set('scope', 'identify email');
-    response.redirect(`https://discord.com/oauth2/authorize?${parameters}`);
-  }
+  const { clientId, clientSecret, label } = oauthCredentials(provider);
+  if (!clientId || !clientSecret) return response.redirect(oauthFailure(platform, `${label} sign-in is not configured yet.`));
+  response.redirect(createOAuthAttempt(provider, platform));
 });
 
 app.get('/api/auth/google/callback', async (request, response) => {
@@ -873,9 +932,9 @@ app.get('/api/auth/google/callback', async (request, response) => {
     if (!tokenResponse.ok) throw new Error('Google did not accept the authorization code.');
     const token = await tokenResponse.json() as { access_token?: string };
     const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    const profile = await profileResponse.json() as { email?: string; name?: string; email_verified?: boolean };
-    if (!profileResponse.ok || !profile.email || profile.email_verified !== true) throw new Error('Google did not return a verified email address.');
-    await finishOAuth(response, attempt, { email: profile.email, name: profile.name || profile.email.split('@')[0] || 'Novo member' });
+    const profile = await profileResponse.json() as { sub?: string; email?: string; name?: string; email_verified?: boolean };
+    if (!profileResponse.ok || !profile.sub || !profile.email || profile.email_verified !== true) throw new Error('Google did not return a verified email address.');
+    await finishOAuth(response, attempt, { subject: profile.sub, email: profile.email, name: profile.name || profile.email.split('@')[0] || 'Novo member' });
   } catch (error) {
     response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Google sign-in failed.'));
   }
@@ -892,11 +951,31 @@ app.get('/api/auth/discord/callback', async (request, response) => {
     if (!tokenResponse.ok) throw new Error('Discord did not accept the authorization code.');
     const token = await tokenResponse.json() as { access_token?: string };
     const profileResponse = await fetch('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    const profile = await profileResponse.json() as { email?: string; global_name?: string; username?: string; verified?: boolean };
-    if (!profileResponse.ok || !profile.email || profile.verified !== true) throw new Error('Discord requires a verified email address for novo sign-in.');
-    await finishOAuth(response, attempt, { email: profile.email, name: profile.global_name || profile.username || profile.email.split('@')[0] || 'Novo member' });
+    const profile = await profileResponse.json() as { id?: string; email?: string; global_name?: string; username?: string; verified?: boolean };
+    if (!profileResponse.ok || !profile.id || !profile.email || profile.verified !== true) throw new Error('Discord requires a verified email address for novo sign-in.');
+    await finishOAuth(response, attempt, { subject: profile.id, email: profile.email, name: profile.global_name || profile.username || profile.email.split('@')[0] || 'Novo member' });
   } catch (error) {
     response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Discord sign-in failed.'));
+  }
+});
+
+app.get('/api/auth/microsoft/callback', async (request, response) => {
+  const state = typeof request.query.state === 'string' ? request.query.state : '';
+  const code = typeof request.query.code === 'string' ? request.query.code : '';
+  const attempt = oauthAttempts.get(state);
+  if (!attempt || attempt.provider !== 'microsoft' || attempt.expiresAt <= Date.now() || !code) return response.redirect(oauthFailure(attempt?.platform ?? 'web', 'Microsoft sign-in expired. Please try again.'));
+  oauthAttempts.delete(state);
+  try {
+    const tenant = process.env.MICROSOFT_TENANT_ID || 'common';
+    const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: process.env.MICROSOFT_CLIENT_ID!, client_secret: process.env.MICROSOFT_CLIENT_SECRET!, redirect_uri: oauthRedirectUri('microsoft'), grant_type: 'authorization_code', scope: 'openid profile email User.Read' }) });
+    if (!tokenResponse.ok) throw new Error('Microsoft did not accept the authorization code.');
+    const token = await tokenResponse.json() as { access_token?: string };
+    const profileResponse = await fetch('https://graph.microsoft.com/oidc/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
+    const profile = await profileResponse.json() as { sub?: string; email?: string; name?: string };
+    if (!profileResponse.ok || !profile.sub || !profile.email) throw new Error('Microsoft did not return an email address.');
+    await finishOAuth(response, attempt, { subject: profile.sub, email: profile.email, name: profile.name || profile.email.split('@')[0] || 'Novo member' });
+  } catch (error) {
+    response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Microsoft sign-in failed.'));
   }
 });
 
@@ -1082,6 +1161,47 @@ app.get('/api/member/profile', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
   response.json({ user });
+});
+
+app.patch('/api/member/profile', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    const changes = memberProfileSchema.parse(request.body);
+    const usernameTaken = [...users.values()].some((candidate) => candidate.id !== user.id && candidate.username.toLowerCase() === changes.username.toLowerCase());
+    if (usernameTaken) return response.status(409).json({ message: 'That username is already in use.' });
+    user.name = changes.name;
+    user.username = changes.username;
+    if (changes.avatarDataUrl !== undefined) user.avatarDataUrl = changes.avatarDataUrl;
+    const account = portalAccounts.get(user.id);
+    if (account) account.name = user.name;
+    response.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/member/password', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    const { currentPassword, newPassword } = memberPasswordSchema.parse(request.body);
+    if (credentials.has(user.email) && !passwordMatches(user.email, currentPassword)) return response.status(401).json({ message: 'Your current password is incorrect.' });
+    credentials.set(user.email, createCredential(user.email, newPassword));
+    response.json({ message: 'Password updated.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/member/oauth/:provider/link', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  const provider = routeParam(request.params.provider);
+  if (provider !== 'google' && provider !== 'discord' && provider !== 'microsoft') return response.status(404).json({ message: 'Unknown sign-in provider.' });
+  const { clientId, clientSecret, label } = oauthCredentials(provider);
+  if (!clientId || !clientSecret) return response.status(503).json({ message: `${label} linking is not configured yet.` });
+  response.json({ authorizationUrl: createOAuthAttempt(provider, 'mobile', user.id) });
 });
 
 app.get('/api/member/daily-status', (request, response) => {
@@ -1785,7 +1905,10 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
       users.set(account.email, {
         id: account.id,
         name: account.name,
+        username: account.email.split('@')[0] || `member-${account.id.slice(0, 8)}`,
         email: account.email,
+        avatarDataUrl: null,
+        linkedAccounts: [],
         mascotName,
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',
@@ -1828,7 +1951,10 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
       member = {
         id: account.id,
         name: account.name,
+        username: account.email.split('@')[0] || `member-${account.id.slice(0, 8)}`,
         email: account.email,
+        avatarDataUrl: null,
+        linkedAccounts: [],
         mascotName: mascotName ?? 'Nova',
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',

@@ -12,7 +12,7 @@ process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE = '1';
 const { app } = await import('./app.js');
 
 async function createMember(email: string, name = 'Sam') {
-  const response = await request(app).post('/api/auth/onboarding').send({ name, email, password: 'password', mascotName: 'Sprout', focus: 'food' });
+  const response = await request(app).post('/api/auth/onboarding').send({ name, email, password: 'Password1!', mascotName: 'Sprout', focus: 'food' });
   assert.equal(response.status, 201);
   return { user: response.body.user, authorization: `Bearer ${response.body.token}` };
 }
@@ -45,6 +45,22 @@ describe('novo API', () => {
     assert.equal(user.lifetimePoints, 0);
     assert.deepEqual(user.dailyQuests, []);
     assert.deepEqual(user.coupons, []);
+  });
+
+  it('enforces the complete password policy and supports profile and password changes', async () => {
+    const weak = await request(app).post('/api/auth/onboarding').send({ name: 'Weak', email: 'weak@example.com', password: 'password1', mascotName: 'Bud', focus: 'food' });
+    assert.equal(weak.status, 400);
+    const { authorization, user } = await createMember('custom-profile@example.com', 'Original Name');
+    assert.equal(user.username, 'custom-profile');
+    const changed = await request(app).patch('/api/member/profile').set('authorization', authorization).send({ name: 'New Name', username: 'new.name', avatarDataUrl: null });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.body.user.username, 'new.name');
+    const wrongCurrent = await request(app).post('/api/member/password').set('authorization', authorization).send({ currentPassword: 'wrong', newPassword: 'EvenBetter2#' });
+    assert.equal(wrongCurrent.status, 401);
+    const updated = await request(app).post('/api/member/password').set('authorization', authorization).send({ currentPassword: 'Password1!', newPassword: 'EvenBetter2#' });
+    assert.equal(updated.status, 200);
+    const signedIn = await request(app).post('/api/auth/sign-in').send({ email: 'custom-profile@example.com', password: 'EvenBetter2#' });
+    assert.equal(signedIn.status, 200);
   });
 
   it('provisions a coloured wristband, reveals its mascot and refreshes quests once daily', async () => {
@@ -297,7 +313,7 @@ describe('novo API', () => {
 
   it('creates a one-time mobile handoff for an existing member', async () => {
     await createMember('handoff@example.com');
-    const signedIn = await request(app).post('/api/auth/web-sign-in').send({ email: 'handoff@example.com', password: 'password' });
+    const signedIn = await request(app).post('/api/auth/web-sign-in').send({ email: 'handoff@example.com', password: 'Password1!' });
     assert.equal(signedIn.status, 200);
     assert.ok(signedIn.body.handoffToken);
     const exchanged = await request(app).post('/api/auth/mobile-handoff/exchange').send({ handoffToken: signedIn.body.handoffToken });

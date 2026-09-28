@@ -11,34 +11,23 @@ const MASCOT_COLORS: Record<MascotType, { body: string; head: string; accent: st
   bird: { body: '#4B92D1', head: '#66A8DF', accent: '#D9EFFF', dark: '#1E405E' },
 };
 
-function createPlushRoughnessTexture() {
-  const size = 32;
-  const data = new Uint8Array(size * size * 4);
-  for (let index = 0; index < size * size; index += 1) {
-    const wave = Math.sin(index * 1.73) * 18;
-    const grain = ((index * 37 + Math.floor(index / size) * 19) % 31) - 15;
-    const value = Math.max(150, Math.min(245, 210 + wave + grain));
-    data[index * 4] = value;
-    data[index * 4 + 1] = value;
-    data[index * 4 + 2] = value;
-    data[index * 4 + 3] = 255;
-  }
-  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(5, 5);
-  texture.needsUpdate = true;
-  return texture;
+function PlushMaterial({ color }: { color: string }) {
+  return <meshPhysicalMaterial color={color} roughness={0.92} sheen={0.58} sheenRoughness={0.9} sheenColor={color} clearcoat={0.01} />;
 }
 
-function PlushMaterial({ color, texture }: { color: string; texture: THREE.Texture }) {
-  return <meshPhysicalMaterial color={color} roughness={0.9} roughnessMap={texture} sheen={0.42} sheenRoughness={0.82} sheenColor={color} clearcoat={0.03} />;
+const COAT_TUFTS: Array<[number, number, number, number, number]> = [
+  [-.62,.96,.65,-.28,.11],[-.34,1.36,.56,-.1,.1],[0,1.5,.45,0,.1],[.34,1.36,.56,.1,.1],[.62,.96,.65,.28,.11],
+  [-.72,.18,.62,-.34,.12],[-.42,-.18,.75,-.18,.13],[0,-.3,.82,0,.13],[.42,-.18,.75,.18,.13],[.72,.18,.62,.34,.12],
+  [-.58,-.82,.55,-.25,.12],[-.2,-1.08,.62,-.08,.11],[.2,-1.08,.62,.08,.11],[.58,-.82,.55,.25,.12],
+];
+
+function CoatTufts({ color, sparse = false }: { color: string; sparse?: boolean }) {
+  return <group>{COAT_TUFTS.filter((_, index) => !sparse || index % 2 === 0).map(([x,y,z,rotation,size], index) => <mesh key={index} position={[x,y,z]} rotation={[Math.PI / 2 + rotation,0,-rotation]} scale={[size,size * 2.2,size]}><coneGeometry args={[1,1,6]}/><meshStandardMaterial color={color} roughness={1}/></mesh>)}</group>;
 }
 
 export function MascotModel3D({ mascotType, accessories, manualRotationX = 0, manualRotationY = 0, isInteracting = false, autoRotate = true }: { mascotType: MascotType; accessories: AccessoryId[]; manualRotationX?: number; manualRotationY?: number; isInteracting?: boolean; autoRotate?: boolean }) {
   const group = useRef<THREE.Group>(null);
   const lastManualRotation = useRef({ x: 0, y: 0 });
-  const plushTexture = useMemo(createPlushRoughnessTexture, []);
   const star = useMemo(() => {
     const shape = new THREE.Shape();
     const spikes = 5;
@@ -54,7 +43,6 @@ export function MascotModel3D({ mascotType, accessories, manualRotationX = 0, ma
     shape.closePath();
     return shape;
   }, []);
-  useEffect(() => () => plushTexture.dispose(), [plushTexture]);
 
   useEffect(() => {
     if (group.current) {
@@ -80,24 +68,30 @@ export function MascotModel3D({ mascotType, accessories, manualRotationX = 0, ma
   const mascot = MASCOT_COLORS[mascotType];
   return (
     <group ref={group} scale={0.8}>
-      <mesh position={[0, -0.55, 0]} scale={mascotType === 'penguin' ? [0.9, 1.22, 0.76] : mascotType === 'turtle' ? [1.08, 0.94, 0.78] : [1.04, 1.12, 0.74]}><sphereGeometry args={[0.96, 36, 28]} /><PlushMaterial color={mascot.body} texture={plushTexture} /></mesh>
-      <mesh position={[0, mascotType === 'turtle' ? 0.62 : 0.67, 0.02]} scale={mascotType === 'bird' ? [0.92, 0.86, 0.82] : mascotType === 'fox' ? [0.98, 1.02, 0.86] : [1.04, 0.94, 0.9]}><sphereGeometry args={[1.03, 36, 28]} /><PlushMaterial color={mascot.head} texture={plushTexture} /></mesh>
+      <mesh position={[0, -0.55, 0]} scale={mascotType === 'penguin' ? [0.9, 1.22, 0.76] : mascotType === 'turtle' ? [1.08, 0.94, 0.78] : [1.04, 1.12, 0.74]}><sphereGeometry args={[0.96, 36, 28]} /><PlushMaterial color={mascot.body} /></mesh>
+      <mesh position={[0, mascotType === 'turtle' ? 0.62 : 0.67, 0.02]} scale={mascotType === 'bird' ? [0.92, 0.86, 0.82] : mascotType === 'fox' ? [0.98, 1.02, 0.86] : [1.04, 0.94, 0.9]}><sphereGeometry args={[1.03, 36, 28]} /><PlushMaterial color={mascot.head} /></mesh>
       {mascotType === 'fox' ? <><mesh position={[-0.68, 1.45, -0.02]} rotation={[0,0,-.18]} scale={[.38,.58,.3]}><coneGeometry args={[1,1.8,4]}/><meshStandardMaterial color={mascot.head}/></mesh><mesh position={[0.68, 1.45, -0.02]} rotation={[0,0,.18]} scale={[.38,.58,.3]}><coneGeometry args={[1,1.8,4]}/><meshStandardMaterial color={mascot.head}/></mesh></> : mascotType === 'polar-bear' ? <><mesh position={[-0.73, 1.31, -0.02]} rotation={[0, 0, -0.22]} scale={[0.42, 0.5, 0.3]}><sphereGeometry args={[1, 24, 18]} /><meshStandardMaterial color={mascot.accent} roughness={0.94} /></mesh><mesh position={[0.73, 1.31, -0.02]} rotation={[0, 0, 0.22]} scale={[0.42, 0.5, 0.3]}><sphereGeometry args={[1, 24, 18]} /><meshStandardMaterial color={mascot.accent} roughness={0.94} /></mesh></> : null}
-      <mesh position={[-0.74, -0.48, 0.02]} rotation={[0, 0, -0.42]} scale={[0.36, 0.82, 0.36]}><capsuleGeometry args={[0.6, 0.7, 8, 16]} /><PlushMaterial color={mascot.body} texture={plushTexture} /></mesh>
-      <mesh position={[0.74, -0.48, 0.02]} rotation={[0, 0, 0.42]} scale={[0.36, 0.82, 0.36]}><capsuleGeometry args={[0.6, 0.7, 8, 16]} /><PlushMaterial color={mascot.body} texture={plushTexture} /></mesh>
-      <mesh position={[-0.55, -1.42, 0.28]} rotation={[0.28, 0, -0.13]} scale={[0.62, 0.48, 0.82]}><sphereGeometry args={[0.72, 28, 20]} /><PlushMaterial color={mascot.body} texture={plushTexture} /></mesh>
-      <mesh position={[0.55, -1.42, 0.28]} rotation={[0.28, 0, 0.13]} scale={[0.62, 0.48, 0.82]}><sphereGeometry args={[0.72, 28, 20]} /><PlushMaterial color={mascot.body} texture={plushTexture} /></mesh>
-      <mesh position={[0, 0.42, 0.82]} scale={[0.58, 0.42, 0.24]}><sphereGeometry args={[0.74, 28, 20]} /><PlushMaterial color={mascot.accent} texture={plushTexture} /></mesh>
+      <mesh position={[-0.74, -0.48, 0.02]} rotation={[0, 0, -0.42]} scale={[0.36, 0.82, 0.36]}><capsuleGeometry args={[0.6, 0.7, 8, 16]} /><PlushMaterial color={mascot.body} /></mesh>
+      <mesh position={[0.74, -0.48, 0.02]} rotation={[0, 0, 0.42]} scale={[0.36, 0.82, 0.36]}><capsuleGeometry args={[0.6, 0.7, 8, 16]} /><PlushMaterial color={mascot.body} /></mesh>
+      <mesh position={[-0.55, -1.42, 0.28]} rotation={[0.28, 0, -0.13]} scale={[0.62, 0.48, 0.82]}><sphereGeometry args={[0.72, 28, 20]} /><PlushMaterial color={mascot.body} /></mesh>
+      <mesh position={[0.55, -1.42, 0.28]} rotation={[0.28, 0, 0.13]} scale={[0.62, 0.48, 0.82]}><sphereGeometry args={[0.72, 28, 20]} /><PlushMaterial color={mascot.body} /></mesh>
+      <mesh position={[0, 0.42, 0.82]} scale={[0.58, 0.42, 0.24]}><sphereGeometry args={[0.74, 28, 20]} /><PlushMaterial color={mascot.accent} /></mesh>
       {mascotType === 'bird' || mascotType === 'penguin' ? <mesh position={[0, 0.59, 1.08]} rotation={[Math.PI / 2,0,0]} scale={[.18,.28,.18]}><coneGeometry args={[1,1,4]}/><meshStandardMaterial color="#F4A43A"/></mesh> : <mesh position={[0, 0.61, 1.02]} scale={[0.16, 0.11, 0.1]}><sphereGeometry args={[1, 18, 12]} /><meshStandardMaterial color={mascot.dark} roughness={0.4} /></mesh>}
       <mesh position={[-0.37, 0.88, 0.87]} scale={[0.095, 0.12, 0.07]}><sphereGeometry args={[1, 16, 12]} /><meshStandardMaterial color={mascot.dark} roughness={0.28} /></mesh>
       <mesh position={[0.37, 0.88, 0.87]} scale={[0.095, 0.12, 0.07]}><sphereGeometry args={[1, 16, 12]} /><meshStandardMaterial color={mascot.dark} roughness={0.28} /></mesh>
       {mascotType === 'turtle' && <mesh position={[0,-0.55,-0.55]} scale={[0.88,1.02,0.34]}><sphereGeometry args={[1,28,20]}/><meshStandardMaterial color="#276A47" roughness={0.8}/></mesh>}
       {mascotType === 'penguin' && <mesh position={[0,-0.45,0.68]} scale={[0.63,0.9,0.18]}><sphereGeometry args={[0.8,24,18]}/><meshStandardMaterial color="#F5F2E8" roughness={0.9}/></mesh>}
-      {mascotType === 'fox' && <group><mesh position={[0,0.55,0.92]} scale={[0.5,0.34,0.16]}><sphereGeometry args={[1,28,20]}/><PlushMaterial color="#FFF0D9" texture={plushTexture}/></mesh><mesh position={[0.92,-0.8,-0.42]} rotation={[0.1,0,-0.65]} scale={[0.38,1.12,0.38]}><capsuleGeometry args={[0.65,0.8,10,22]}/><PlushMaterial color="#E87838" texture={plushTexture}/></mesh><mesh position={[1.34,-1.2,-0.3]} rotation={[0.1,0,-0.65]} scale={[0.36,0.42,0.36]}><sphereGeometry args={[1,24,18]}/><PlushMaterial color="#FFF0D9" texture={plushTexture}/></mesh></group>}
-      {mascotType === 'penguin' && <group><mesh position={[-0.92,-0.38,-0.04]} rotation={[0,0,-0.36]} scale={[0.18,0.88,0.45]}><capsuleGeometry args={[0.7,0.7,8,18]}/><PlushMaterial color="#171B1A" texture={plushTexture}/></mesh><mesh position={[0.92,-0.38,-0.04]} rotation={[0,0,0.36]} scale={[0.18,0.88,0.45]}><capsuleGeometry args={[0.7,0.7,8,18]}/><PlushMaterial color="#171B1A" texture={plushTexture}/></mesh><mesh position={[-0.48,-1.68,0.48]} scale={[0.5,0.12,0.58]}><sphereGeometry args={[1,22,16]}/><meshStandardMaterial color="#F3A733" roughness={0.72}/></mesh><mesh position={[0.48,-1.68,0.48]} scale={[0.5,0.12,0.58]}><sphereGeometry args={[1,22,16]}/><meshStandardMaterial color="#F3A733" roughness={0.72}/></mesh></group>}
+      {mascotType === 'fox' && <group><mesh position={[0,0.55,0.92]} scale={[0.5,0.34,0.16]}><sphereGeometry args={[1,28,20]}/><PlushMaterial color="#FFF0D9"/></mesh><mesh position={[0.92,-0.8,-0.42]} rotation={[0.1,0,-0.65]} scale={[0.38,1.12,0.38]}><capsuleGeometry args={[0.65,0.8,10,22]}/><PlushMaterial color="#E87838"/></mesh><mesh position={[1.34,-1.2,-0.3]} rotation={[0.1,0,-0.65]} scale={[0.36,0.42,0.36]}><sphereGeometry args={[1,24,18]}/><PlushMaterial color="#FFF0D9"/></mesh></group>}
+      {mascotType === 'penguin' && <group><mesh position={[-0.92,-0.38,-0.04]} rotation={[0,0,-0.36]} scale={[0.18,0.88,0.45]}><capsuleGeometry args={[0.7,0.7,8,18]}/><PlushMaterial color="#171B1A"/></mesh><mesh position={[0.92,-0.38,-0.04]} rotation={[0,0,0.36]} scale={[0.18,0.88,0.45]}><capsuleGeometry args={[0.7,0.7,8,18]}/><PlushMaterial color="#171B1A"/></mesh><mesh position={[-0.48,-1.68,0.48]} scale={[0.5,0.12,0.58]}><sphereGeometry args={[1,22,16]}/><meshStandardMaterial color="#F3A733" roughness={0.72}/></mesh><mesh position={[0.48,-1.68,0.48]} scale={[0.5,0.12,0.58]}><sphereGeometry args={[1,22,16]}/><meshStandardMaterial color="#F3A733" roughness={0.72}/></mesh></group>}
       {mascotType === 'turtle' && <group><mesh position={[0,-0.5,-0.72]} scale={[1.02,1.12,0.3]}><sphereGeometry args={[1,32,24]}/><meshPhysicalMaterial color="#286C48" roughness={0.74} clearcoat={0.12}/></mesh>{[-0.48,0,0.48].map((x) => <mesh key={x} position={[x,-0.52,-1.01]} scale={[0.24,0.5,0.08]}><sphereGeometry args={[1,18,14]}/><meshStandardMaterial color="#6FB783" roughness={0.82}/></mesh>)}</group>}
-      {mascotType === 'bird' && <group><mesh position={[-0.92,-0.42,0.04]} rotation={[0,0,-0.5]} scale={[0.24,0.9,0.5]}><capsuleGeometry args={[0.72,0.62,8,18]}/><PlushMaterial color="#397FBF" texture={plushTexture}/></mesh><mesh position={[0.92,-0.42,0.04]} rotation={[0,0,0.5]} scale={[0.24,0.9,0.5]}><capsuleGeometry args={[0.72,0.62,8,18]}/><PlushMaterial color="#397FBF" texture={plushTexture}/></mesh><mesh position={[0,1.58,-0.1]} rotation={[0,0,-0.2]} scale={[0.13,0.48,0.18]}><coneGeometry args={[1,1.7,5]}/><meshStandardMaterial color="#78B9E7" roughness={0.8}/></mesh><mesh position={[0,-1.42,-0.56]} rotation={[0,0,Math.PI/4]} scale={[0.46,0.62,0.14]}><boxGeometry args={[1,1,1]}/><meshStandardMaterial color="#2E70AC" roughness={0.84}/></mesh></group>}
+      {mascotType === 'bird' && <group><mesh position={[-0.92,-0.42,0.04]} rotation={[0,0,-0.5]} scale={[0.24,0.9,0.5]}><capsuleGeometry args={[0.72,0.62,8,18]}/><PlushMaterial color="#397FBF"/></mesh><mesh position={[0.92,-0.42,0.04]} rotation={[0,0,0.5]} scale={[0.24,0.9,0.5]}><capsuleGeometry args={[0.72,0.62,8,18]}/><PlushMaterial color="#397FBF"/></mesh><mesh position={[0,1.58,-0.1]} rotation={[0,0,-0.2]} scale={[0.13,0.48,0.18]}><coneGeometry args={[1,1.7,5]}/><meshStandardMaterial color="#78B9E7" roughness={0.8}/></mesh><mesh position={[0,-1.42,-0.56]} rotation={[0,0,Math.PI/4]} scale={[0.46,0.62,0.14]}><boxGeometry args={[1,1,1]}/><meshStandardMaterial color="#2E70AC" roughness={0.84}/></mesh></group>}
       {mascotType === 'polar-bear' && <group><mesh position={[-0.73,1.32,0.16]} scale={[0.2,0.24,0.08]}><sphereGeometry args={[1,20,16]}/><meshStandardMaterial color="#C9D4D8" roughness={0.95}/></mesh><mesh position={[0.73,1.32,0.16]} scale={[0.2,0.24,0.08]}><sphereGeometry args={[1,20,16]}/><meshStandardMaterial color="#C9D4D8" roughness={0.95}/></mesh></group>}
+      {mascotType !== 'turtle' && <CoatTufts color={mascotType === 'penguin' ? '#303534' : mascot.head} sparse={mascotType === 'bird'} />}
+      {mascotType === 'penguin' && <group><mesh position={[-.34,.78,.91]} rotation={[0,-.08,-.16]} scale={[.28,.46,.09]}><sphereGeometry args={[1,24,18]}/><meshPhysicalMaterial color="#F4F2EA" roughness={.98} sheen={.45}/></mesh><mesh position={[.34,.78,.91]} rotation={[0,.08,.16]} scale={[.28,.46,.09]}><sphereGeometry args={[1,24,18]}/><meshPhysicalMaterial color="#F4F2EA" roughness={.98} sheen={.45}/></mesh><mesh position={[0,-.62,.79]} scale={[.56,.86,.11]}><sphereGeometry args={[1,28,22]}/><meshPhysicalMaterial color="#E9E8E1" roughness={.99} sheen={.5}/></mesh>{[-.44,-.22,0,.22,.44].map((x) => <mesh key={x} position={[x,-.02,.93]} rotation={[Math.PI/2,0,x*.3]} scale={[.055,.16,.055]}><coneGeometry args={[1,1,6]}/><meshStandardMaterial color="#F5F3EC" roughness={1}/></mesh>)}</group>}
+      {mascotType === 'polar-bear' && <group><mesh position={[0,.47,.99]} scale={[.38,.28,.2]}><sphereGeometry args={[1,28,20]}/><meshPhysicalMaterial color="#F7F6F0" roughness={.98} sheen={.38}/></mesh><mesh position={[0,.52,1.17]} scale={[.13,.09,.08]}><sphereGeometry args={[1,18,14]}/><meshStandardMaterial color="#1D2523" roughness={.35}/></mesh></group>}
+      {mascotType === 'fox' && <group><mesh position={[-.68,1.47,.18]} rotation={[0,0,-.18]} scale={[.2,.38,.12]}><coneGeometry args={[1,1.8,4]}/><meshStandardMaterial color="#6A3528" roughness={.96}/></mesh><mesh position={[.68,1.47,.18]} rotation={[0,0,.18]} scale={[.2,.38,.12]}><coneGeometry args={[1,1.8,4]}/><meshStandardMaterial color="#6A3528" roughness={.96}/></mesh><mesh position={[0,.52,1.04]} scale={[.34,.22,.16]}><sphereGeometry args={[1,24,18]}/><meshPhysicalMaterial color="#FFF1DD" roughness={.97} sheen={.35}/></mesh></group>}
+      {mascotType === 'bird' && <group>{[-.5,-.25,0,.25,.5].map((x,index) => <mesh key={x} position={[x*.62,-.55+Math.abs(x)*.18,.77]} rotation={[0,0,(index-2)*.08]} scale={[.2,.42,.08]}><sphereGeometry args={[1,18,14]}/><meshPhysicalMaterial color={index % 2 ? '#5EA3D7' : '#D7EDFA'} roughness={.94} sheen={.25}/></mesh>)}</group>}
+      {mascotType === 'turtle' && <group position={[0,-.5,-1.02]}>{([[0,0],[-.42,.3],[.42,.3],[-.42,-.3],[.42,-.3]] as Array<[number, number]>).map(([x,y],index) => <mesh key={index} position={[x,y,0]} scale={[.3,.32,.045]}><sphereGeometry args={[1,18,14]}/><meshStandardMaterial color={index === 0 ? '#4C9364' : '#3C8157'} roughness={.9}/></mesh>)}</group>}
       {has('bright-star') && <mesh position={[0, -0.54, 0.79]} scale={0.92}><shapeGeometry args={[star]} /><meshStandardMaterial color="#F5E94B" emissive="#D8C91D" emissiveIntensity={0.18} side={THREE.DoubleSide} /></mesh>}
 
       {has('sunny-cap') && <group position={[0.05, 1.51, 0.03]} rotation={[0, 0, -0.08]}><mesh scale={[1.05, 0.42, 0.76]}><sphereGeometry args={[0.82, 36, 24]} /><meshStandardMaterial color="#F6BF3E" roughness={0.68} /></mesh><mesh position={[0.62, -0.17, 0.42]} rotation={[0.1, 0, 0]} scale={[0.76, 0.12, 0.45]}><sphereGeometry args={[0.7, 28, 18]} /><meshStandardMaterial color="#E9A928" roughness={0.7} /></mesh></group>}

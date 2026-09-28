@@ -128,7 +128,14 @@ npm run dev:server
 
 Existing member accounts are created through app onboarding. Unknown email sign-ins are routed to onboarding instead of silently creating a filled demo profile.
 
-For Google sign-in, set the Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and the matching server variables (`GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_WEB_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`). For Discord, set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. Configure each environment callback as `https://<environment-host>/api/auth/<provider>/callback`.
+For Google sign-in, set the Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and the matching server variables (`GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_WEB_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`). For Discord, set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. For Microsoft, create a Microsoft Entra web app registration and set `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and optionally `MICROSOFT_TENANT_ID` (defaults to `common`). Configure each environment callback as `https://<environment-host>/api/auth/<provider>/callback`.
+
+The Microsoft registration should allow the account audience you want (use organizational and personal Microsoft accounts for broad sign-in support). Under **Authentication**, add these Web redirect URIs:
+
+- `https://novo.tancheetiong.com/api/auth/microsoft/callback`
+- `https://novodev.tancheetiong.com/api/auth/microsoft/callback`
+
+Create the secret under **Certificates & secrets** and store its value, not its secret ID. A separate Android or iOS Microsoft registration is not required because the novo server completes the OAuth exchange and then redirects back into the app.
 
 ## Vision review
 

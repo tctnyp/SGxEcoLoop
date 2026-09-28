@@ -18,9 +18,10 @@ import { Text } from '../components/Typography';
 import { ACCESSORIES } from '../data/accessories';
 import { ACCESSORY_COLOR_SEEDS, AccessoryColorScheme, createAccessoryColorScheme } from '../dynamicTheme';
 import { colors } from '../theme';
-import { AccessoryCategory, AccessoryId, AccessoryRarity, Friend, MarketItem, MascotType, NovoEvent, NovoLocation, TaskSubmission, User, WeeklyCompetition } from '../types';
+import { AccessoryCategory, AccessoryId, AccessoryRarity, Friend, MarketItem, MascotType, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from '../types';
 import { completeWeeklyCompetition, createFriendInviteUrl, getFriends, getLocations, getMemberMarket, getMemberTasks, signUpForEvent, startWeeklyCompetition, submitCustomTask, submitDailyQuiz, submitDailyTask } from '../api';
 import { startNovoWristbandListener } from '../nfc';
+import { ProfileSettingsPage } from './ProfileSettingsPage';
 
 type Tab = 'home' | 'marketplace' | 'tasks' | 'friends' | 'settings';
 type AccessoryFilter = 'all' | AccessoryCategory;
@@ -38,6 +39,9 @@ type Props = {
   onRedeemCoupon: (points: number, offerId: string, name: string) => Promise<void>;
   onUpdateNotificationPreferences: (preferences: User['notificationPreferences']) => Promise<void>;
   onUserUpdated: (user: User) => Promise<void>;
+  onUpdateProfile: (input: { name: string; username: string; avatarDataUrl?: string | null }) => Promise<User>;
+  onChangePassword: (input: { currentPassword: string; newPassword: string }) => Promise<void>;
+  onLinkAccount: (provider: OAuthProvider) => Promise<User>;
 };
 
 type AccessoryOffer = { id: AccessoryId; price: number; description: string; imageDataUrl?: string | null };
@@ -159,7 +163,7 @@ export function HomeScreen(props: Props) {
           {tab === 'marketplace' && <MarketplacePage user={props.user} token={props.token} palette={palette} onPurchase={props.onPurchase} onContribute={props.onContribute} onRedeemCoupon={props.onRedeemCoupon} />}
           {tab === 'tasks' && <TasksPage token={props.token} palette={palette} onUserUpdated={props.onUserUpdated} />}
           {tab === 'friends' && <FriendsPage user={props.user} token={props.token} palette={palette} />}
-          {tab === 'settings' && <SettingsPage user={props.user} palette={palette} onUpdateNotifications={props.onUpdateNotificationPreferences} onSignOut={props.onSignOut} onUnpair={props.onUnpair} onDeleteAccount={props.onDeleteAccount} />}
+          {tab === 'settings' && <SettingsPage user={props.user} palette={palette} onUpdateProfile={props.onUpdateProfile} onChangePassword={props.onChangePassword} onLinkAccount={props.onLinkAccount} onUpdateNotifications={props.onUpdateNotificationPreferences} onSignOut={props.onSignOut} onUnpair={props.onUnpair} onDeleteAccount={props.onDeleteAccount} />}
         </View>
         <GlassNav active={tab} palette={palette} onChange={changeTab} />
       </LinearGradient>
@@ -631,14 +635,24 @@ function TasksPage({ token, palette, onUserUpdated }: { token: string; palette: 
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) throw new Error('Enable location access to see yourself and nearby activities on the map.');
-      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       setUserLocation({ latitude: result.coords.latitude, longitude: result.coords.longitude });
       setFocusUser((current) => current + 1);
     } catch (reason) {
       if (showError) Alert.alert('Location unavailable', reason instanceof Error ? reason.message : 'Could not find your current location.');
     } finally { setLocating(false); }
   };
-  useEffect(() => { void locateUser(false); }, []);
+  useEffect(() => {
+    let active = true;
+    let subscription: Location.LocationSubscription | undefined;
+    void Location.requestForegroundPermissionsAsync().then(async (permission) => {
+      if (!active || !permission.granted) return;
+      subscription = await Location.watchPositionAsync({ accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 2 }, (position) => {
+        if (active) setUserLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+      });
+    }).catch(() => undefined);
+    return () => { active = false; subscription?.remove(); };
+  }, []);
 
   const openTask = (quest: User['dailyQuests'][number] | null) => {
     setActiveQuest(quest);
@@ -819,6 +833,7 @@ function FriendsPage({ user, token, palette }: { user: User; token: string; pale
   const inviteUrl = createFriendInviteUrl(user.id);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [questFriends, setQuestFriends] = useState<string[]>([]);
+  const [qrExpanded, setQrExpanded] = useState(false);
   useEffect(() => { getFriends(token).then(setFriends).catch(() => setFriends([])); }, [token]);
   const shareInvite = () => Share.share({
     title: 'Join my novo circle',
@@ -828,11 +843,11 @@ function FriendsPage({ user, token, palette }: { user: User; token: string; pale
   return (
     <View style={styles.pagePad}>
       <PageTitle eyebrow="YOUR CIRCLE" title="Friends" right={<Pressable onPress={shareInvite} accessibilityRole="button" accessibilityLabel="Share friend invite" style={[styles.roundButton, { backgroundColor: palette.primary }]}><Ionicons name="person-add" size={20} color={palette.onPrimary} /></Pressable>} />
-      <GlassPanel style={styles.inviteCard}><View style={styles.qrCode}><QRCode value={inviteUrl} size={82} color={palette.deep} backgroundColor="#FFFFFF" quietZone={5} /></View><View style={{ flex: 1 }}><Text style={[styles.inviteTitle, { color: palette.onSurface }]}>Grow your circle</Text><Text style={[styles.inviteText, { color: palette.onSurfaceVariant }]}>Friends can scan this QR or open your private invite URL.</Text><Pressable onPress={shareInvite} accessibilityRole="button" accessibilityLabel="Share invite link" style={[styles.copyLink, { alignSelf: 'flex-start', minHeight: 40, paddingRight: 10, marginTop: 4 }]}><Ionicons name="link" size={15} color={palette.deep} /><Text style={[styles.copyLinkText, { color: palette.deep }]}>Share invite link</Text></Pressable></View></GlassPanel>
+      <GlassPanel style={styles.inviteCard}><Pressable onPress={() => setQrExpanded(true)} accessibilityRole="button" accessibilityLabel="Expand friend invite QR code" style={styles.qrCode}><QRCode value={inviteUrl} size={82} color={palette.deep} backgroundColor="#FFFFFF" quietZone={5} /></Pressable><View style={{ flex: 1 }}><Text style={[styles.inviteTitle, { color: palette.onSurface }]}>Grow your circle</Text><Text style={[styles.inviteText, { color: palette.onSurfaceVariant }]}>Friends can scan this QR or open the app-first invite URL. Tap the QR to enlarge it.</Text><Pressable onPress={shareInvite} accessibilityRole="button" accessibilityLabel="Share invite link" style={[styles.copyLink, { alignSelf: 'flex-start', minHeight: 40, paddingRight: 10, marginTop: 4 }]}><Ionicons name="link" size={15} color={palette.deep} /><Text style={[styles.copyLinkText, { color: palette.deep }]}>Share invite link</Text></Pressable></View></GlassPanel>
       <View style={styles.sectionRow}><Text style={[styles.sectionTitle, { color: palette.onSurface }]}>Your friends</Text><Text style={[styles.sectionLink, { color: palette.deep }]}>{friends.length} friends</Text></View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.friendList}>
         {friends.length ? friends.map((friend) => <FriendRow key={friend.id} name={friend.name} mascot={friend.mascotName} accessories={friend.accessories} lifetimePoints={friend.lifetimePoints} palette={palette} added={questFriends.includes(friend.id)} onQuest={() => setQuestFriends((current) => current.includes(friend.id) ? current.filter((id) => id !== friend.id) : [...current, friend.id])} onMore={() => Alert.alert(friend.name, `${friend.name} and ${friend.mascotName} have earned ${friend.lifetimePoints.toLocaleString()} lifetime leaves.`)} />) : <View style={[styles.friendEmpty, { backgroundColor: withAlpha(palette.surfaceBright, 0.7), borderColor: palette.outlineVariant }]}><View style={[styles.friendEmptyIcon, { backgroundColor: palette.primaryContainer }]}><Ionicons name="people-outline" size={24} color={palette.onPrimaryContainer} /></View><View style={styles.friendEmptyCopy}><Text style={[styles.friendEmptyTitle, { color: palette.onSurface }]}>Your circle starts here</Text><Text style={[styles.friendEmptyText, { color: palette.onSurfaceVariant }]}>Share the QR above to add your first friend.</Text></View></View>}
-      </ScrollView>
+      </ScrollView><Modal visible={qrExpanded} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setQrExpanded(false)}><Pressable style={styles.qrModal} onPress={() => setQrExpanded(false)} accessibilityRole="button" accessibilityLabel="Close expanded QR code"><View style={styles.qrModalCard}><QRCode value={inviteUrl} size={260} color={palette.deep} backgroundColor="#FFFFFF" quietZone={12} /><Text style={[styles.qrModalTitle, { color: palette.onSurface }]}>Scan to open novo</Text><Text style={[styles.qrModalText, { color: palette.onSurfaceVariant }]}>The invite opens the novo app when installed, with the website as fallback.</Text></View></Pressable></Modal>
     </View>
   );
 }
@@ -843,19 +858,21 @@ function FriendRow({ name, mascot, accessories, lifetimePoints, palette, added, 
   return <View style={[styles.friendRow, { minHeight: 96, backgroundColor: withAlpha(palette.surfaceBright, 0.76), borderColor: palette.outlineVariant }]}><View style={styles.friendInfo}><View style={[styles.friendAvatar, { backgroundColor: friendScheme.primaryContainer }]}><Text style={[styles.friendInitial, { color: friendScheme.onPrimaryContainer }]}>{name[0]}</Text></View><View style={styles.friendCopy}><Text style={[styles.friendName, { color: palette.onSurface }]}>{name}</Text><View style={styles.friendPlushieLine}><Text style={[styles.friendPlushieName, { color: palette.onSurfaceVariant }]}>{mascot}</Text><View style={styles.friendAccessories}>{accessories.map((id) => { const badgeScheme = createAccessoryColorScheme([id]); return <View key={id} accessibilityLabel={ACCESSORIES.find((item) => item.id === id)?.name} style={[styles.friendBadge, { backgroundColor: badgeScheme.primaryContainer }]}><Ionicons name={accessoryIcon(id)} size={12} color={badgeScheme.onPrimaryContainer} /></View>; })}</View></View><Text style={[styles.friendProgress, { color: palette.onSurfaceVariant }]}>{lifetimePoints.toLocaleString()} lifetime leaves · Level {level.level}</Text></View></View><View style={styles.friendActions}><Pressable onPress={onQuest} accessibilityRole="button" accessibilityLabel={added ? `Remove ${name} from quest` : `Add ${name} to quest`} accessibilityState={{ selected: added }} style={[styles.questButton, { width: 44, height: 44, borderRadius: 14, backgroundColor: added ? palette.primary : palette.deep }]}><Ionicons name={added ? 'checkmark' : 'flash-outline'} size={17} color={added ? palette.onPrimary : '#FFFFFF'} /></Pressable><Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel={`More actions for ${name}`} style={[styles.moreButton, { width: 44, height: 44, borderRadius: 14, backgroundColor: palette.surfaceContainerHigh }]}><Ionicons name="ellipsis-horizontal" size={18} color={palette.onSurface} /></Pressable></View></View>;
 }
 
-function SettingsPage({ user, palette, onUpdateNotifications, onSignOut, onUnpair, onDeleteAccount }: { user: User; palette: Palette; onUpdateNotifications: (preferences: User['notificationPreferences']) => Promise<void>; onSignOut: () => void; onUnpair: () => void; onDeleteAccount: () => void }) {
+function SettingsPage({ user, palette, onUpdateProfile, onChangePassword, onLinkAccount, onUpdateNotifications, onSignOut, onUnpair, onDeleteAccount }: { user: User; palette: Palette; onUpdateProfile: (input: { name: string; username: string; avatarDataUrl?: string | null }) => Promise<User>; onChangePassword: (input: { currentPassword: string; newPassword: string }) => Promise<void>; onLinkAccount: (provider: OAuthProvider) => Promise<User>; onUpdateNotifications: (preferences: User['notificationPreferences']) => Promise<void>; onSignOut: () => void; onUnpair: () => void; onDeleteAccount: () => void }) {
   const [showCredits, setShowCredits] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const confirmUnpair = () => Alert.alert('Unpair wristband?', `${user.mascotName} stays in-app, but the wristband must be paired again before Home can open.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Unpair', style: 'destructive', onPress: onUnpair }]);
   const confirmDelete = () => Alert.alert('Delete account?', 'This permanently removes your novo account, points, mascot and digital accessory collection from every device.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete account', style: 'destructive', onPress: onDeleteAccount }]);
   if (showCredits) return <CreditsPage onBack={() => setShowCredits(false)} />;
   if (showNotifications) return <NotificationSettingsPage preferences={user.notificationPreferences} palette={palette} onBack={() => setShowNotifications(false)} onSave={onUpdateNotifications} />;
+  if (showProfile) return <ProfileSettingsPage user={user} palette={palette} onBack={() => setShowProfile(false)} onUpdateProfile={onUpdateProfile} onChangePassword={onChangePassword} onLinkAccount={onLinkAccount} />;
   return (
     <View style={styles.pagePad}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.settingsPageContent}>
         <PageTitle eyebrow="MAKE IT YOURS" title="Settings" />
-        <GlassPanel style={styles.profileCard}><View style={[styles.profileAvatar, { backgroundColor: palette.primary }]}><Text style={[styles.profileInitial, { color: palette.onPrimary }]}>{user.name[0]}</Text></View><View style={{ flex: 1 }}><Text style={[styles.profileName, { color: palette.onSurface }]}>{user.name}</Text><Text style={[styles.profileEmail, { color: palette.onSurfaceVariant }]} numberOfLines={1}>{user.email}</Text></View><View accessible accessibilityRole="text" accessibilityLabel="Member profile" style={[styles.editButton, { backgroundColor: palette.secondaryContainer }]}><Text style={[styles.editText, { color: palette.onSecondaryContainer }]}>Member</Text></View></GlassPanel>
-        <View style={styles.settingsList}><Setting icon="notifications-outline" label="Notifications" onPress={() => setShowNotifications(true)} /><Setting icon="information-circle-outline" label="Credits" onPress={() => setShowCredits(true)} /><Setting icon="radio-outline" label="Unpair wristband" onPress={confirmUnpair} /></View>
+        <GlassPanel style={styles.profileCard}>{user.avatarDataUrl ? <Image source={{ uri: user.avatarDataUrl }} style={styles.profileAvatarImage} /> : <View style={[styles.profileAvatar, { backgroundColor: palette.primary }]}><Text style={[styles.profileInitial, { color: palette.onPrimary }]}>{user.name[0]}</Text></View>}<View style={{ flex: 1 }}><Text style={[styles.profileName, { color: palette.onSurface }]}>{user.name}</Text><Text style={[styles.profileEmail, { color: palette.onSurfaceVariant }]} numberOfLines={1}>@{user.username} · {user.email}</Text></View><Pressable onPress={() => setShowProfile(true)} accessibilityRole="button" accessibilityLabel="Edit profile" style={[styles.editButton, { backgroundColor: palette.secondaryContainer }]}><Text style={[styles.editText, { color: palette.onSecondaryContainer }]}>Edit</Text></Pressable></GlassPanel>
+        <View style={styles.settingsList}><Setting icon="person-circle-outline" label="Profile, password & linked accounts" onPress={() => setShowProfile(true)} /><Setting icon="notifications-outline" label="Notifications" onPress={() => setShowNotifications(true)} /><Setting icon="information-circle-outline" label="Credits" onPress={() => setShowCredits(true)} /><Setting icon="radio-outline" label="Unpair wristband" onPress={confirmUnpair} /></View>
         <View style={styles.accountActions}><Pressable onPress={onSignOut} accessibilityRole="button" accessibilityLabel="Sign out" style={({ pressed }) => [styles.signOutButton, { backgroundColor: palette.surfaceContainerLow }, pressed && styles.cardPressed]}><Ionicons name="log-out-outline" size={19} color={palette.onSurface} /><Text style={[styles.signOutText, { color: palette.onSurface }]}>Sign out</Text></Pressable><Pressable onPress={confirmDelete} accessibilityRole="button" accessibilityLabel="Delete account" accessibilityHint="Requires confirmation" style={({ pressed }) => [styles.deleteButton, { backgroundColor: palette.errorContainer }, pressed && styles.cardPressed]}><Ionicons name="trash-outline" size={19} color={palette.error} /><Text style={[styles.deleteText, { color: palette.error }]}>Delete account</Text></Pressable></View>
       </ScrollView>
     </View>
@@ -963,5 +980,10 @@ const styles = StyleSheet.create({
   weeklyRank: { width: 34, fontWeight: '900' },
   weeklyLeaderName: { flex: 1, fontWeight: '800' },
   weeklyLeaderTime: { fontWeight: '700' },
+  profileAvatarImage: { width: 54, height: 54, borderRadius: 19 },
+  qrModal: { flex: 1, backgroundColor: 'rgba(8,18,14,.78)', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  qrModalCard: { width: '100%', maxWidth: 340, borderRadius: 28, backgroundColor: '#FFFFFF', padding: 22, alignItems: 'center', gap: 9 },
+  qrModalTitle: { fontSize: 20, fontWeight: '900', marginTop: 4 },
+  qrModalText: { fontSize: 12, lineHeight: 17, textAlign: 'center' },
   navWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 86, paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, zIndex: 20 }, navShadow: { flex: 1, borderRadius: 26, shadowColor: colors.shadow, shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: 7 }, elevation: 10, backgroundColor: 'transparent' }, navClip: { flex: 1, borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.88)', backgroundColor: 'rgba(233,239,231,0.78)' }, navRow: { flex: 1, flexDirection: 'row', alignItems: 'center', padding: 3, gap: 2 }, navItem: { flex: 1, minHeight: 62, borderRadius: 19, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: 'transparent' }, navIconWrap: { width: 44, height: 31, borderRadius: 14, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, navText: { color: colors.inkMuted, backgroundColor: 'transparent', fontSize: 10, fontWeight: '600' }, navTextActive: { color: colors.ink, backgroundColor: 'transparent', fontWeight: '800' },
 });

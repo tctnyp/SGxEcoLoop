@@ -32,6 +32,7 @@ export function PairWristbandScreen({ user, loadPickupLocations, onPair, onReser
   const [savingPickup, setSavingPickup] = useState(false);
   const [pairedUser, setPairedUser] = useState<User | null>(null);
   const pulse = useRef(new Animated.Value(0)).current;
+  const guide = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     let active = true;
@@ -65,6 +66,17 @@ export function PairWristbandScreen({ user, loadPickupLocations, onPair, onReser
     animation.start();
     return () => animation.stop();
   }, [pulse, state]);
+  useEffect(() => {
+    if (mode !== 'pair' || state === 'success') return undefined;
+    const animation = Animated.loop(Animated.sequence([
+      Animated.timing(guide, { toValue: 1, duration: 1650, useNativeDriver: true }),
+      Animated.delay(800),
+      Animated.timing(guide, { toValue: 0, duration: 1250, useNativeDriver: true }),
+      Animated.delay(450),
+    ]));
+    animation.start();
+    return () => animation.stop();
+  }, [guide, mode, state]);
 
   const shown = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -104,7 +116,7 @@ export function PairWristbandScreen({ user, loadPickupLocations, onPair, onReser
     <View style={styles.progress}><View style={styles.progressDone}/></View>
     <View style={styles.copy}><Text style={styles.eyebrow}>{mode === 'pair' ? 'TAP · PAIR · MEET' : 'CHOOSE · COLLECT · RETURN'}</Text><Text style={styles.title}>{state === 'success' ? `Meet ${pairedUser?.mascotName ?? user.mascotName}!` : mode === 'pair' ? 'Pair your wristband' : 'Choose a collection point'}</Text><Text style={styles.subtitle}>{state === 'success' ? `${pairedUser?.mascotName ?? user.mascotName} is now your ${pairedUser?.wristbandColor.replace('-', ' ') ?? 'Novo'} ${pairedUser?.mascotType.replace('-', ' ') ?? 'animal'} companion.` : mode === 'pair' ? 'Already have your wristband? Tap it to this phone. Pairing is required before you can enter novo.' : 'Reserve a convenient Pick! Locker or POPStation, collect your wristband, then return here to pair it.'}</Text></View>
     {mode === 'pair' ? <>
-      <View style={styles.bandStage}><View style={styles.bandLoop}/><Animated.View style={[styles.nfcFace, state === 'scanning' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) }] }, state === 'success' && styles.successFace]}><Ionicons name={state === 'success' ? 'checkmark' : 'radio-outline'} size={36} color={colors.forest}/></Animated.View><View style={styles.colorDots}>{['#F5F3EC','#242827','#F28C43','#39A76A','#3E8FD8'].map((color) => <View key={color} style={[styles.colorDot,{backgroundColor:color}]}/>)}</View></View>
+      <View style={styles.nfcGuideStage}><View style={styles.detectionBeam} /><Animated.View style={[styles.guideWristband, { opacity: guide.interpolate({ inputRange: [0, .12, .9, 1], outputRange: [.65, 1, 1, .75] }), transform: [{ translateX: guide.interpolate({ inputRange: [0, 1], outputRange: [-124, 18] }) }, { rotate: '-9deg' }] }]}><View style={styles.guideStrap} /><View style={styles.guideModule}><Ionicons name="leaf" size={18} color={colors.forest} /></View></Animated.View><View style={styles.phoneMock}><View style={styles.phoneSpeaker} /><Animated.View style={[styles.nfcGuideFace, state === 'scanning' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) }] }, state === 'success' && styles.successFace]}><Ionicons name={state === 'success' ? 'checkmark' : 'radio-outline'} size={28} color={colors.forest}/></Animated.View><View style={styles.phoneHome} /></View><Text style={styles.guideCaption}>Move the wristband behind the top of your phone</Text></View>
       <View style={styles.optionSummary}><View style={styles.optionIcon}><Ionicons name="radio-outline" size={21} color={colors.forest}/></View><View style={{flex:1}}><Text style={styles.optionTitle}>I have a wristband</Text><Text style={styles.optionText}>Keep it near the top of your phone while novo reads its NFC tag.</Text></View></View>
     </> : <View style={styles.collectionPage}>
       <View style={styles.collectionHero}><Ionicons name="cube-outline" size={30} color={colors.forest}/><View style={{flex:1}}><Text style={styles.optionTitle}>I need a wristband</Text><Text style={styles.optionText}>Your selected point is saved to your account. It does not unlock the app until the wristband is paired.</Text></View></View>
@@ -124,4 +136,14 @@ const styles = StyleSheet.create({
   ,collectionHero:{minHeight:82,borderRadius:22,padding:14,backgroundColor:'#F0F6E8',flexDirection:'row',alignItems:'center',gap:12}
   ,locationMeta:{alignItems:'flex-end',gap:3},distance:{color:colors.inkMuted,fontSize:9,fontWeight:'700'},emptyLocations:{color:colors.inkMuted,fontSize:12,lineHeight:17,padding:14,textAlign:'center'},secondaryAction:{minHeight:50,borderRadius:17,borderWidth:1,borderColor:'#DCE5D8',backgroundColor:'#F8FAF6',paddingHorizontal:14,flexDirection:'row',alignItems:'center',justifyContent:'center',gap:8}
   ,secondaryActionText:{flex:1,color:colors.forest,fontSize:14,fontWeight:'800',textAlign:'center'}
+  ,nfcGuideStage:{height:190,alignItems:'center',justifyContent:'center',overflow:'hidden'}
+  ,detectionBeam:{position:'absolute',left:'50%',marginLeft:-55,top:19,width:32,height:128,borderRadius:18,backgroundColor:'rgba(223,248,126,.3)',borderWidth:1,borderColor:'rgba(34,122,98,.25)'}
+  ,guideWristband:{position:'absolute',zIndex:1,width:176,height:56,alignItems:'center',justifyContent:'center'}
+  ,guideStrap:{position:'absolute',width:176,height:44,borderRadius:24,borderWidth:13,borderColor:'#DFF87E'}
+  ,guideModule:{width:48,height:48,borderRadius:17,backgroundColor:'#FFFFFF',borderWidth:2,borderColor:colors.forest,alignItems:'center',justifyContent:'center',shadowColor:colors.shadow,shadowOpacity:.14,shadowRadius:8,elevation:3}
+  ,phoneMock:{zIndex:3,width:84,height:142,borderRadius:22,borderWidth:4,borderColor:colors.ink,backgroundColor:'#EEF3EB',alignItems:'center',justifyContent:'center',shadowColor:colors.shadow,shadowOpacity:.2,shadowRadius:12,elevation:7}
+  ,phoneSpeaker:{position:'absolute',top:8,width:24,height:4,borderRadius:3,backgroundColor:colors.inkMuted}
+  ,phoneHome:{position:'absolute',bottom:8,width:18,height:4,borderRadius:3,backgroundColor:'#B8C2BC'}
+  ,nfcGuideFace:{width:52,height:52,borderRadius:18,backgroundColor:'#FFFFFF',borderWidth:2,borderColor:colors.forest,alignItems:'center',justifyContent:'center'}
+  ,guideCaption:{position:'absolute',bottom:2,color:colors.inkMuted,fontSize:11,fontWeight:'700'}
 });
