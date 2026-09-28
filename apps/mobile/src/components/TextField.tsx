@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { colors } from '../theme';
 import { Text, TextInput } from './Typography';
 
@@ -18,6 +18,7 @@ type Props = {
 export function TextField({ label, value, onChangeText, placeholder, secure, keyboardType, error, icon }: Props) {
   const [hidden, setHidden] = useState(secure);
   const [focused, setFocused] = useState(false);
+  const webOutlineStyle = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as never) : undefined;
   return (
     <View style={styles.wrap}>
       <Text style={styles.label}>{label}</Text>
@@ -34,7 +35,7 @@ export function TextField({ label, value, onChangeText, placeholder, secure, key
           autoCorrect={false}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          style={styles.input}
+          style={[styles.input, webOutlineStyle]}
           accessibilityLabel={label}
           accessibilityHint={secure ? 'Enter your account password' : 'Enter the email address for your novo account'}
           autoComplete={secure ? 'current-password' : keyboardType === 'email-address' ? 'email' : undefined}
@@ -57,7 +58,7 @@ const styles = StyleSheet.create({
   field: { minHeight: 56, borderRadius: 18, borderWidth: 1.5, borderColor: colors.outline, backgroundColor: colors.surface, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 10 },
   focused: { borderColor: colors.forest, borderWidth: 2, backgroundColor: '#FCFFF4' },
   error: { borderColor: colors.danger },
-  input: { flex: 1, color: colors.ink, fontSize: 16, paddingVertical: 14, outlineStyle: 'none' } as never,
+  input: { flex: 1, color: colors.ink, fontSize: 16, paddingVertical: 14 },
   visibilityButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: -10 },
   errorText: { color: colors.danger, fontSize: 13, lineHeight: 18, marginLeft: 4 },
 });
