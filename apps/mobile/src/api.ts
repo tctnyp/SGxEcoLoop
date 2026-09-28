@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { AccessoryId, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from './types';
+import { AccessoryId, AccountStatus, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from './types';
 
 const PRODUCTION_API_URL = 'https://novo.tancheetiong.com/api';
 
@@ -37,10 +37,19 @@ export const PUBLIC_APP_URL = resolvePublicAppUrl(API_URL);
 export const createFriendInviteUrl = (userId: string) => `${PUBLIC_APP_URL}/invite/${encodeURIComponent(userId)}`;
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly accountStatus?: AccountStatus, readonly code?: string) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+let accountStatusListener: ((status: AccountStatus) => void) | null = null;
+
+export function setAccountStatusListener(listener: ((status: AccountStatus) => void) | null) {
+  accountStatusListener = listener;
+  return () => {
+    if (accountStatusListener === listener) accountStatusListener = null;
+  };
 }
 
 async function request<T>(path: string, options?: RequestInit, token?: string): Promise<T> {
@@ -59,8 +68,9 @@ async function request<T>(path: string, options?: RequestInit, token?: string): 
   }
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({})) as { message?: string };
-    throw new ApiError(data.message ?? 'Something went wrong. Please try again.', response.status);
+    const data = await response.json().catch(() => ({})) as { message?: string; accountStatus?: AccountStatus; code?: string };
+    if (data.accountStatus) accountStatusListener?.(data.accountStatus);
+    throw new ApiError(data.message ?? 'Something went wrong. Please try again.', response.status, data.accountStatus, data.code);
   }
 
   if (response.status === 204) return undefined as T;

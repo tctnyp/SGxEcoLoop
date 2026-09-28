@@ -253,6 +253,44 @@ describe('novo API', () => {
     assert.equal((await request(app).delete(`/api/portal/accounts/${createdAccount.body.account.id}`).set('x-novo-role', 'admin')).status, 204);
   });
 
+  it('applies active, limited and suspended access without destroying the mobile session', async () => {
+    const member = await createMember('status-member@example.com', 'Status Member');
+
+    const limited = await request(app).patch(`/api/portal/accounts/${member.user.id}`).set('x-novo-role', 'admin').send({ status: 'limited' });
+    assert.equal(limited.status, 200);
+    assert.equal(limited.body.account.status, 'limited');
+
+    const limitedSession = await request(app).get('/api/auth/mobile-session').set('authorization', member.authorization);
+    assert.equal(limitedSession.status, 200);
+    assert.equal(limitedSession.body.accountStatus, 'limited');
+    const safeProfileUpdate = await request(app).patch('/api/member/profile').set('authorization', member.authorization).send({ name: 'Limited Member', username: member.user.username, avatarDataUrl: null });
+    assert.equal(safeProfileUpdate.status, 200);
+    const blockedMutation = await request(app).post('/api/member/market/coupon/redeem').set('authorization', member.authorization).send({ points: 250, offerId: 'limited-test', name: 'Limited test' });
+    assert.equal(blockedMutation.status, 403);
+    assert.equal(blockedMutation.body.accountStatus, 'limited');
+    assert.equal(blockedMutation.body.code, 'ACCOUNT_LIMITED');
+
+    const suspended = await request(app).patch(`/api/portal/accounts/${member.user.id}`).set('x-novo-role', 'admin').send({ status: 'suspended' });
+    assert.equal(suspended.status, 200);
+    const suspendedSession = await request(app).get('/api/auth/mobile-session').set('authorization', member.authorization);
+    assert.equal(suspendedSession.status, 423);
+    assert.equal(suspendedSession.body.accountStatus, 'suspended');
+    assert.equal(suspendedSession.body.code, 'ACCOUNT_SUSPENDED');
+    const suspendedSignIn = await request(app).post('/api/auth/sign-in').send({ email: 'status-member@example.com', password: 'Password1!' });
+    assert.equal(suspendedSignIn.status, 423);
+
+    const active = await request(app).patch(`/api/portal/accounts/${member.user.id}`).set('x-novo-role', 'admin').send({ status: 'active' });
+    assert.equal(active.status, 200);
+    const restoredSession = await request(app).get('/api/auth/mobile-session').set('authorization', member.authorization);
+    assert.equal(restoredSession.status, 200);
+    assert.equal(restoredSession.body.accountStatus, 'active');
+    const restoredSignIn = await request(app).post('/api/auth/sign-in').send({ email: 'status-member@example.com', password: 'Password1!' });
+    assert.equal(restoredSignIn.status, 200);
+
+    const legacyStatus = await request(app).patch(`/api/portal/accounts/${member.user.id}`).set('x-novo-role', 'admin').send({ status: 'review' });
+    assert.equal(legacyStatus.status, 400);
+  });
+
   it('persists notification preferences and only returns connected friends', async () => {
     const first = await createMember('friends-one@example.com', 'First');
     const second = await createMember('friends-two@example.com', 'Second');

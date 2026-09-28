@@ -2,8 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   ApiError,
   addFriend,
@@ -11,7 +11,6 @@ import {
   deleteMemberAccount,
   equipAccessory,
   exchangeMobileHandoff,
-  getMemberProfile,
   interactWithWristband,
   pairWristband,
   purchaseAccessory,
@@ -20,6 +19,7 @@ import {
   getWristbandPickupLocations,
   revokeSession,
   restoreMobileSession,
+  setAccountStatusListener,
   startLinkedAccount,
   updateMemberProfile,
   changeMemberPassword,
@@ -27,7 +27,7 @@ import {
   unpairWristband,
 } from './src/api';
 import { AppErrorBoundary } from './src/components/AppErrorBoundary';
-import { AccessoryId, AuthResult, OAuthProvider, Screen, User } from './src/types';
+import { AccessoryId, AccountStatus, AuthResult, OAuthProvider, Screen, User } from './src/types';
 import { colors } from './src/theme';
 
 const SignInScreen = lazy(() => import('./src/screens/SignInScreen').then((module) => ({ default: module.SignInScreen })));
@@ -45,6 +45,8 @@ function NovoApp() {
   const [user, setUser] = useState<User | null>(null);
   const [draft, setDraft] = useState<{ name: string; email: string }>();
   const [booting, setBooting] = useState(true);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus>('active');
+  const [checkingAccess, setCheckingAccess] = useState(false);
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
 
@@ -106,6 +108,7 @@ function NovoApp() {
     await AsyncStorage.multiRemove([SESSION_KEY, LAST_PROFILE_KEY, ...(activeUser ? [profileKey(activeUser.email)] : [])]);
     setUser(null);
     setDraft(undefined);
+    setAccountStatus('active');
     setScreen('signin');
   };
 
@@ -117,9 +120,15 @@ function NovoApp() {
     }
 
     if (!result.user || !result.token) throw new Error('The server did not return a complete novo session.');
+    setAccountStatus(result.accountStatus ?? 'active');
     await rememberSession(result.token);
     await routeUser(result.user);
   };
+
+  useEffect(() => setAccountStatusListener((status) => {
+    setAccountStatus(status);
+    if (status === 'suspended' && tokenRef.current) setScreen('account-status');
+  }), []);
 
   useEffect(() => {
     let mounted = true;
@@ -163,11 +172,20 @@ function NovoApp() {
         try {
           const result = await restoreMobileSession(storedToken);
           if (!result.user) throw new Error('Profile missing from session.');
+          setAccountStatus(result.accountStatus ?? 'active');
           await rememberSession(storedToken);
           await routeUser(result.user);
           await acceptPendingFriend();
         } catch (error) {
-          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+          if (error instanceof ApiError && error.accountStatus === 'suspended') {
+            const cachedProfile = await AsyncStorage.getItem(LAST_PROFILE_KEY);
+            if (cachedProfile) setUser(JSON.parse(cachedProfile) as User);
+            await rememberSession(storedToken);
+            setAccountStatus('suspended');
+            setScreen('account-status');
+            return;
+          }
+          if (error instanceof ApiError && error.status === 401) {
             await clearSession(false);
             return;
           }
@@ -205,7 +223,9 @@ function NovoApp() {
       const token = tokenRef.current;
       if (state !== 'active' || !token) return;
       try {
-        await saveUser(await getMemberProfile(token));
+        const result = await restoreMobileSession(token);
+        setAccountStatus(result.accountStatus ?? 'active');
+        if (result.user) await routeUser(result.user);
       } catch {
         // Keep the cached profile visible during a temporary connection loss.
       }
@@ -224,6 +244,24 @@ function NovoApp() {
   };
 
   const handleProfileCreated = (result: AuthResult) => handleAuth(result);
+
+  const handleCheckAccess = async () => {
+    const token = tokenRef.current;
+    if (!token || checkingAccess) return;
+    setCheckingAccess(true);
+    try {
+      const result = await restoreMobileSession(token);
+      if (!result.user) throw new Error('Your profile could not be restored.');
+      setAccountStatus(result.accountStatus ?? 'active');
+      await routeUser(result.user);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.accountStatus === 'suspended')) {
+        Alert.alert('Could not check access', error instanceof Error ? error.message : 'Please try again.');
+      }
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
 
   const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
   const handleLoadWristbandPickupLocations = useCallback((coordinates?: { latitude: number; longitude: number }) => getWristbandPickupLocations(requireToken(), coordinates), []);
@@ -345,10 +383,12 @@ function NovoApp() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
+      {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
       {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
       {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
       {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
+      {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}
     </SafeAreaProvider>
   );
 }
@@ -365,4 +405,18 @@ export default function App() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
+  limitedBanner: { paddingHorizontal: 18, paddingBottom: 12, backgroundColor: '#FFF2C7', borderBottomWidth: 1, borderBottomColor: '#E2C66F' },
+  limitedTitle: { color: '#5D4300', fontFamily: 'GoogleSansFlex', fontSize: 15, fontWeight: '700' },
+  limitedCopy: { marginTop: 2, color: '#725A18', fontFamily: 'GoogleSansFlex', fontSize: 12, lineHeight: 16 },
+  statusScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.cream },
+  statusCard: { width: '100%', maxWidth: 440, padding: 28, borderRadius: 32, backgroundColor: '#FFFFFF', shadowColor: '#17352A', shadowOpacity: 0.12, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 6 },
+  statusIcon: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: '#FFE1DE' },
+  statusIconText: { color: '#A9342B', fontFamily: 'GoogleSansFlex', fontSize: 30, fontWeight: '800' },
+  statusEyebrow: { marginTop: 22, color: '#A9342B', fontFamily: 'GoogleSansFlex', fontSize: 12, fontWeight: '800', letterSpacing: 1.4 },
+  statusTitle: { marginTop: 8, color: colors.forest, fontFamily: 'GoogleSansFlex', fontSize: 28, fontWeight: '700' },
+  statusCopy: { marginTop: 12, marginBottom: 24, color: '#5E6F67', fontFamily: 'GoogleSansFlex', fontSize: 15, lineHeight: 22 },
+  primaryButton: { minHeight: 54, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: colors.forest },
+  primaryButtonText: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 16, fontWeight: '700' },
+  secondaryButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  secondaryButtonText: { color: colors.forest, fontFamily: 'GoogleSansFlex', fontSize: 15, fontWeight: '700' },
 });

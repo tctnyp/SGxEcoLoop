@@ -50,6 +50,7 @@ type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'trop
 type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 
 type PortalRole = 'organizer' | 'staff' | 'admin';
+type AccountStatus = 'active' | 'limited' | 'suspended';
 type PortalEvent = {
   id: string;
   organizerId: string;
@@ -65,7 +66,7 @@ type PortalEvent = {
   latitude: number | null;
   longitude: number | null;
 };
-type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: 'active' | 'review' | 'suspended' };
+type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: AccountStatus };
 type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
 type WeeklyEntry = { id: string; weekId: string; userId: string; startedAt: string; completedAt: string | null; elapsedMs: number | null; pointsAwarded: number; correct: boolean };
 type AiDetection = { label: string; confidence: number; box?: { x1: number; y1: number; x2: number; y2: number } };
@@ -246,6 +247,16 @@ function coordinatesForSingaporeLocation(location: string) {
 const databaseReady = initializeDatabase(databaseCollections).then(async () => {
   let changed = false;
   const now = Date.now();
+  for (const account of portalAccounts.values()) {
+    const legacyStatus = (account as unknown as { status?: string }).status;
+    if (legacyStatus === 'review' || legacyStatus === 'needs_review') {
+      account.status = 'limited';
+      changed = true;
+    } else if (legacyStatus !== 'active' && legacyStatus !== 'limited' && legacyStatus !== 'suspended') {
+      account.status = 'active';
+      changed = true;
+    }
+  }
   for (const [token, session] of webSessions) {
     if (session.expiresAt > now && portalAccounts.has(session.accountId)) continue;
     webSessions.delete(token);
@@ -427,7 +438,7 @@ const accountPatchSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   email: z.string().email().optional(),
   role: z.enum(['member', 'organizer', 'staff', 'admin']).optional(),
-  status: z.enum(['active', 'review', 'suspended']).optional(),
+  status: z.enum(['active', 'limited', 'suspended']).optional(),
   password: z.string().min(6).max(128).optional(),
   points: z.number().int().min(0).max(10_000_000).optional(),
   lifetimePoints: z.number().int().min(0).max(100_000_000).optional(),
@@ -438,7 +449,7 @@ const accountCreateSchema = z.object({
   name: z.string().trim().min(1).max(80),
   email: z.string().email(),
   role: z.enum(['member', 'organizer', 'staff', 'admin']),
-  status: z.enum(['active', 'review', 'suspended']).default('active'),
+  status: z.enum(['active', 'limited', 'suspended']).default('active'),
   password: z.string().min(6).max(128),
   points: z.number().int().min(0).max(10_000_000).default(0),
   lifetimePoints: z.number().int().min(0).max(100_000_000).default(0),
@@ -796,6 +807,8 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
   if (attempt.linkUserId) {
     const linkingUser = findUser(attempt.linkUserId);
     if (!linkingUser) return response.redirect(oauthFailure(attempt.platform, 'The account-linking session expired.'));
+    const linkingAccount = portalAccounts.get(linkingUser.id);
+    if (!linkingAccount || linkingAccount.status === 'suspended') return response.redirect(oauthFailure(attempt.platform, 'This account is suspended. Contact a novo administrator for access.'));
     if (linkedElsewhere && linkedElsewhere.id !== linkingUser.id) return response.redirect(oauthFailure(attempt.platform, `This ${oauthCredentials(attempt.provider).label} account is already linked to another novo account.`));
     linkingUser.linkedAccounts = linkingUser.linkedAccounts.filter((account) => account.provider !== attempt.provider);
     linkingUser.linkedAccounts.push({ provider: attempt.provider, subject: profile.subject, email });
@@ -819,8 +832,8 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
     response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}`);
     return;
   }
-  if (account.status !== 'active') {
-    response.redirect(oauthFailure(attempt.platform, 'This account is not active.'));
+  if (account.status === 'suspended') {
+    response.redirect(oauthFailure(attempt.platform, 'This account is suspended. Contact a novo administrator for access.'));
     return;
   }
   if (!user.linkedAccounts.some((linked) => linked.provider === attempt.provider && linked.subject === profile.subject)) {
@@ -843,11 +856,22 @@ function sessionFromRequest(request: Request) {
   const session = token ? webSessions.get(token) : undefined;
   if (!session) return null;
   const account = portalAccounts.get(session.accountId);
-  if (session.expiresAt <= Date.now() || !account || account.status !== 'active' || account.role !== session.role) {
+  if (session.expiresAt <= Date.now() || !account || account.role !== session.role) {
     webSessions.delete(session.token);
     return null;
   }
   return session;
+}
+
+function accountFromRequest(request: Request) {
+  const authorization = request.header('authorization');
+  const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
+  if (!token) return null;
+  const webSession = webSessions.get(token);
+  if (webSession && webSession.expiresAt > Date.now()) return portalAccounts.get(webSession.accountId) ?? null;
+  const mobileSession = mobileSessions.get(token);
+  if (mobileSession && mobileSession.expiresAt > Date.now()) return portalAccounts.get(mobileSession.userId) ?? null;
+  return null;
 }
 
 function memberFromRequest(request: Request) {
@@ -899,6 +923,21 @@ app.use(async (_request, _response, next) => {
   } catch (error) {
     next(error);
   }
+});
+app.use((request, response, next) => {
+  const account = accountFromRequest(request);
+  if (!account || request.path === '/api/auth/sign-out') return next();
+  if (account.status === 'suspended') return response.status(423).json({ message: 'This account is suspended. Contact a novo administrator for access.', accountStatus: 'suspended', code: 'ACCOUNT_SUSPENDED' });
+  const safeLimitedMutation = request.path === '/api/auth/account/profile'
+    || request.path === '/api/auth/account/password'
+    || request.path === '/api/member/profile'
+    || request.path === '/api/member/password'
+    || request.path === '/api/member/notifications'
+    || request.path.startsWith('/api/member/oauth/');
+  if (account.status === 'limited' && request.method !== 'GET' && !safeLimitedMutation) {
+    return response.status(403).json({ message: 'This account has limited access. Contact a novo administrator to restore full access.', accountStatus: 'limited', code: 'ACCOUNT_LIMITED' });
+  }
+  next();
 });
 app.use((request, response, next) => {
   if (request.method === 'POST' || request.method === 'PATCH' || request.method === 'DELETE') {
@@ -1053,11 +1092,11 @@ app.post('/api/auth/sign-in', async (request, response, next) => {
     const existing = users.get(email.toLowerCase());
     if (!existing) return response.json({ isNewUser: true, draft: { name: '', email: email.toLowerCase() } });
     const account = findPortalAccountByEmail(email);
-    if (account?.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
+    if (account?.status === 'suspended') return response.status(423).json({ message: 'This account is suspended. Contact a novo administrator for access.', accountStatus: 'suspended', code: 'ACCOUNT_SUSPENDED' });
     if (!passwordMatches(email, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const token = createMobileSession(existing.id);
     await persistDatabase(persistedCollections);
-    response.json({ isNewUser: false, token, user: existing });
+    response.json({ isNewUser: false, token, user: existing, accountStatus: account?.status ?? 'active' });
   } catch (error) {
     next(error);
   }
@@ -1072,7 +1111,7 @@ app.post('/api/auth/web-sign-in', async (request, response, next) => {
 
     if (!account) return response.status(401).json({ message: 'No account was found. Create your account in the novo app first.' });
 
-    if (account.status === 'suspended') return response.status(403).json({ message: 'This account is suspended.' });
+    if (account.status === 'suspended') return response.status(423).json({ message: 'This account is suspended. Contact a novo administrator for access.', accountStatus: 'suspended', code: 'ACCOUNT_SUSPENDED' });
     if (!passwordMatches(normalizedEmail, password)) return response.status(401).json({ message: 'Invalid email or password.' });
     const session = createWebSession(account);
     const privileged = account.role !== 'member';
@@ -1153,10 +1192,12 @@ app.post('/api/auth/mobile-handoff/exchange', async (request, response, next) =>
     if (!handoff || handoff.consumed || handoff.expiresAt <= Date.now()) return response.status(401).json({ message: 'This sign-in handoff has expired.' });
     const user = findUser(handoff.userId);
     if (!user) return response.status(404).json({ message: 'Account not found.' });
+    const account = portalAccounts.get(user.id);
+    if (!account || account.status === 'suspended') return response.status(423).json({ message: 'This account is suspended. Contact a novo administrator for access.', accountStatus: 'suspended', code: 'ACCOUNT_SUSPENDED' });
     handoff.consumed = true;
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
-    response.json({ isNewUser: false, token, user });
+    response.json({ isNewUser: false, token, user, accountStatus: account.status });
   } catch (error) {
     next(error);
   }
@@ -1173,9 +1214,11 @@ app.post('/api/auth/google', async (request, response, next) => {
     const email = profile.email.toLowerCase();
     const user = users.get(email);
     if (!user) return response.json({ isNewUser: true, draft: { name: profile.name ?? '', email } });
+    const account = portalAccounts.get(user.id);
+    if (!account || account.status === 'suspended') return response.status(423).json({ message: 'This account is suspended. Contact a novo administrator for access.', accountStatus: 'suspended', code: 'ACCOUNT_SUSPENDED' });
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
-    response.json({ isNewUser: false, token, user });
+    response.json({ isNewUser: false, token, user, accountStatus: account.status });
   } catch (error) {
     next(error);
   }
@@ -1187,7 +1230,7 @@ app.post('/api/auth/onboarding', async (request, response, next) => {
     const user = createMember(input);
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
-    response.status(201).json({ isNewUser: false, token, user });
+    response.status(201).json({ isNewUser: false, token, user, accountStatus: 'active' });
   } catch (error) {
     next(error);
   }
@@ -1196,13 +1239,15 @@ app.post('/api/auth/onboarding', async (request, response, next) => {
 app.get('/api/auth/mobile-session', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Mobile session expired.' });
-  response.json({ isNewUser: false, user });
+  const account = portalAccounts.get(user.id);
+  if (!account) return response.status(401).json({ message: 'Account not found.' });
+  response.json({ isNewUser: false, user, accountStatus: account.status });
 });
 
 app.get('/api/member/profile', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  response.json({ user });
+  response.json({ user, accountStatus: portalAccounts.get(user.id)?.status ?? 'active' });
 });
 
 app.patch('/api/member/profile', (request, response, next) => {
@@ -2034,7 +2079,7 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
     }
     if (password) credentials.set(account.email, createCredential(account.email, password));
 
-    if (password || changes.role || changes.status) {
+    if (password || changes.role) {
       for (const [token, session] of webSessions) if (session.accountId === account.id && token !== request.header('authorization')?.replace(/^Bearer /, '')) webSessions.delete(token);
       for (const [token, session] of mobileSessions) if (session.userId === account.id) mobileSessions.delete(token);
       for (const [token, handoff] of mobileHandoffs) if (handoff.userId === account.id) mobileHandoffs.delete(token);

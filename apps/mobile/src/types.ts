@@ -1,4 +1,5 @@
-export type Screen = 'signin' | 'onboarding' | 'pair-wristband' | 'home';
+export type Screen = 'signin' | 'onboarding' | 'pair-wristband' | 'home' | 'account-status';
+export type AccountStatus = 'active' | 'limited' | 'suspended';
 
 export type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
 export type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
@@ -103,6 +104,7 @@ export type Friend = { id: string; name: string; mascotName: string; mascotType:
 
 export type AuthResult = {
   isNewUser: boolean;
+  accountStatus?: AccountStatus;
   token?: string;
   user?: User;
   draft?: Pick<User, 'name' | 'email'>;
