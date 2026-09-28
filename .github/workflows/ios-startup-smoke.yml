@@ -70,17 +70,22 @@ jobs:
           xcrun simctl install "$device" "$app_path"
 
           log_file="$RUNNER_TEMP/novo-startup.log"
+          console_file="$RUNNER_TEMP/novo-console.log"
+          launch_pid=''
           xcrun simctl spawn "$device" log stream \
             --style compact \
             --level debug \
             --predicate 'process == "novoDevelopment" OR composedMessage CONTAINS[c] "Unhandled JS Exception" OR composedMessage CONTAINS[c] "ReactNativeJS"' \
             >"$log_file" 2>&1 &
           log_pid=$!
-          trap 'kill "$log_pid" 2>/dev/null || true; xcrun simctl shutdown "$device" 2>/dev/null || true' EXIT
+          trap 'kill "$log_pid" 2>/dev/null || true; test -z "${launch_pid:-}" || kill "$launch_pid" 2>/dev/null || true; xcrun simctl shutdown "$device" 2>/dev/null || true' EXIT
 
-          xcrun simctl launch "$device" com.novo.ecoloop
+          xcrun simctl launch --terminate-running-process --console-pty "$device" com.novo.ecoloop >"$console_file" 2>&1 &
+          launch_pid=$!
           sleep 12
-          if ! xcrun simctl spawn "$device" launchctl print system | grep -q 'com.novo.ecoloop'; then
+          if ! kill -0 "$launch_pid" 2>/dev/null; then
+            wait "$launch_pid" || true
+            cat "$console_file"
             cat "$log_file"
             echo 'novo exited during startup.' >&2
             exit 1
@@ -90,6 +95,7 @@ jobs:
             echo 'novo emitted a fatal startup error.' >&2
             exit 1
           fi
+          cat "$console_file"
           cat "$log_file"
 
       - name: Upload startup log
@@ -97,5 +103,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: ios-startup-log
-          path: ${{ runner.temp }}/novo-startup.log
+          path: |
+            ${{ runner.temp }}/novo-startup.log
+            ${{ runner.temp }}/novo-console.log
           if-no-files-found: warn
