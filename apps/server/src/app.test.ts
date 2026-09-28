@@ -6,12 +6,13 @@ process.env.NOVO_DB_PATH = ':memory:';
 process.env.NOVO_ADMIN_EMAIL = 'admin@example.com';
 process.env.NOVO_STAFF_EMAIL = 'staff@example.com';
 process.env.NOVO_ORGANIZER_EMAIL = 'organizer@example.com';
+process.env.NOVO_BOOTSTRAP_PASSWORD = 'password';
 process.env.NOVO_LOCKER_DIRECTORY_OFFLINE = '1';
 process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE = '1';
 const { app } = await import('./app.js');
 
 async function createMember(email: string, name = 'Sam') {
-  const response = await request(app).post('/api/auth/onboarding').send({ name, email, mascotName: 'Sprout', focus: 'food' });
+  const response = await request(app).post('/api/auth/onboarding').send({ name, email, password: 'password', mascotName: 'Sprout', focus: 'food' });
   assert.equal(response.status, 201);
   return { user: response.body.user, authorization: `Bearer ${response.body.token}` };
 }

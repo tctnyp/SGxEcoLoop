@@ -28,7 +28,7 @@ async function waitForServer() {
 async function startServer() {
   server = spawn(process.execPath, ['dist/index.js'], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), NOVO_DB_PATH: databasePath, NOVO_ADMIN_EMAIL: 'persistent-admin@example.com' },
+    env: { ...process.env, PORT: String(port), NOVO_DB_PATH: databasePath, NOVO_ADMIN_EMAIL: 'persistent-admin@example.com', NOVO_BOOTSTRAP_PASSWORD: 'password' },
     stdio: 'ignore',
   });
   await waitForServer();

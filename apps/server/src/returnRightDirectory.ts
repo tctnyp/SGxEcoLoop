@@ -95,22 +95,24 @@ type ReturnRightCache = {
   expiresAt: number;
   updatedAt: string;
   locations: LockerLocation[];
-  source: 'live' | 'fallback';
+  source: 'live' | 'cached' | 'fallback';
 };
 
 let cache: ReturnRightCache | null = null;
 
-export async function getReturnRightDirectory(options: { refresh?: boolean; offline?: boolean } = {}) {
+export async function getReturnRightDirectory(options: { refresh?: boolean; offline?: boolean; persisted?: LockerLocation[] } = {}) {
   if (!options.refresh && cache && cache.expiresAt > Date.now()) return cache;
   if (options.offline) {
-    cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), locations: fallbackReturnRightLocations, source: 'fallback' };
+    const stored = options.persisted?.filter((location) => location.kind === 'return-right') ?? [];
+    cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), locations: stored.length ? stored : fallbackReturnRightLocations, source: stored.length ? 'cached' : 'fallback' };
     return cache;
   }
   try {
     const locations = await retrieveReturnRightLocations();
     cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), locations, source: 'live' };
   } catch {
-    cache = { expiresAt: Date.now() + RETRY_TTL_MS, updatedAt: new Date().toISOString(), locations: fallbackReturnRightLocations, source: 'fallback' };
+    const stored = options.persisted?.filter((location) => location.kind === 'return-right') ?? [];
+    cache = { expiresAt: Date.now() + RETRY_TTL_MS, updatedAt: new Date().toISOString(), locations: stored.length ? stored : fallbackReturnRightLocations, source: stored.length ? 'cached' : 'fallback' };
   }
   return cache;
 }

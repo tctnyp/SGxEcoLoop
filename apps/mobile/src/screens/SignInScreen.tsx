@@ -3,7 +3,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import * as WebBrowser from 'expo-web-browser';
 import { Keyboard, KeyboardAvoidingView, LayoutChangeEvent, Platform, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { checkEmailStatus, continueWithGoogle, signIn } from '../api';
+import { API_URL, checkEmailStatus, continueWithGoogle, requestPasswordReset, restoreMobileSession, signIn } from '../api';
 import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
 import { Plushie } from '../components/Plushie';
@@ -26,11 +26,12 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [step, setStep] = useState<'email' | 'password'>('email');
+  const [recovering, setRecovering] = useState(false);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
   const [heroCopyFrame, setHeroCopyFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [plushieFrame, setPlushieFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState<'email' | 'password' | 'google' | null>(null);
+  const [loading, setLoading] = useState<'email' | 'password' | 'google' | 'discord' | 'reset' | null>(null);
   const configuredGoogleClientId = Platform.select({ android: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID, ios: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID, default: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID }) ?? process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID;
   const googleClientId = configuredGoogleClientId ?? 'not-configured.apps.googleusercontent.com';
   const [googleRequest, , promptGoogle] = Google.useIdTokenAuthRequest({ clientId: googleClientId, androidClientId: process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? googleClientId, iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? googleClientId, webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? googleClientId, selectAccount: true });
@@ -110,6 +111,49 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
     }
   };
 
+  const handleDiscord = async () => {
+    setError('');
+    setLoading('discord');
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(`${API_URL}/auth/discord/start?platform=mobile`, 'novo://auth/oauth');
+      if (result.type !== 'success') throw new Error(result.type === 'cancel' || result.type === 'dismiss' ? 'Discord sign-in was cancelled.' : 'Discord sign-in did not complete.');
+      const url = new URL(result.url);
+      const oauthError = url.searchParams.get('oauthError');
+      if (oauthError) throw new Error(oauthError);
+      const token = url.searchParams.get('token');
+      if (token) {
+        const session = await restoreMobileSession(token);
+        await onAuthenticated({ ...session, token });
+        return;
+      }
+      const oauthEmail = url.searchParams.get('email');
+      if (url.searchParams.has('oauthNew') && oauthEmail) {
+        await onAuthenticated({ isNewUser: true, draft: { email: oauthEmail, name: url.searchParams.get('name') ?? '' } });
+        return;
+      }
+      throw new Error('Discord did not return a novo session.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Discord sign in did not work.');
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    const normalizedEmail = (email ?? '').trim();
+    if (!normalizedEmail.includes('@')) return setError('Enter a valid email address.');
+    setError('');
+    setLoading('reset');
+    try {
+      const result = await requestPasswordReset(normalizedEmail);
+      setError(result.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'We could not send the reset email.');
+    } finally {
+      setLoading(null);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -135,13 +179,13 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
           <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard]}>
             <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
-              <Text accessibilityRole="header" style={styles.title}>{step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
-              <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
+              <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
+              <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
             </View>
 
             <View style={styles.form}>
-              {step === 'email' ? <>
-                {!constrained && <><Button label={configuredGoogleClientId ? 'Continue with Google' : 'Google sign-in needs setup'} icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={!configuredGoogleClientId || !googleRequest} /><View style={styles.divider}><View style={styles.line} /><Text style={styles.or}>or continue with email</Text><View style={styles.line} /></View></>}
+              {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
+                {!constrained && <><View style={styles.socialButtons}><Button label={configuredGoogleClientId ? 'Google' : 'Google needs setup'} icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={!configuredGoogleClientId || !googleRequest}/><Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/></View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
                 <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
                 {!constrained && <View style={styles.signupRow}>
@@ -154,7 +198,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
                   <Text style={styles.changeEmail}>Change</Text>
                 </Pressable>
                 <TextField label="Password" value={password} onChangeText={setPassword} secure placeholder="At least 6 characters" icon="lock-closed-outline" error={error || undefined} />
-                <Text style={styles.forgot}>Forgot password?</Text>
+                <Pressable onPress={() => { setRecovering(true); setError(''); }}><Text style={styles.forgot}>Forgot password?</Text></Pressable>
                 <Button label="Sign in" onPress={handleSignIn} loading={loading === 'password'} />
               </>}
             </View>
@@ -214,6 +258,7 @@ const styles = StyleSheet.create({
   title: { color: colors.ink, fontSize: 29, lineHeight: 34, fontWeight: '900', letterSpacing: -1.2 },
   subtitle: { color: colors.inkMuted, fontSize: 14, lineHeight: 20, marginTop: 3 },
   form: { gap: 10 },
+  socialButtons: { flexDirection: 'row', gap: 9 },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 2 },
   line: { flex: 1, height: 1, backgroundColor: colors.outline },
   or: { color: colors.inkMuted, fontSize: 14, fontWeight: '600' },

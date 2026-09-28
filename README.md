@@ -122,12 +122,13 @@ The database now starts without demo users or fake records. Set one or more envi
 $env:NOVO_ADMIN_EMAIL='admin@your-domain.sg'
 $env:NOVO_STAFF_EMAIL='staff@your-domain.sg'
 $env:NOVO_ORGANIZER_EMAIL='organizer@your-domain.sg'
+$env:NOVO_BOOTSTRAP_PASSWORD='replace-this-after-first-login'
 npm run dev:server
 ```
 
 Existing member accounts are created through app onboarding. Unknown email sign-ins are routed to onboarding instead of silently creating a filled demo profile.
 
-For Google sign-in, set the appropriate Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and allow the same IDs on the server with `GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, and `GOOGLE_WEB_CLIENT_ID` (or comma-separated `GOOGLE_CLIENT_IDS`). Without these credentials the app clearly disables the Google button instead of using a simulated account.
+For Google sign-in, set the Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and the matching server variables (`GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_WEB_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`). For Discord, set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. Configure each environment callback as `https://<environment-host>/api/auth/<provider>/callback`.
 
 ## Vision review
 

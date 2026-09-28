@@ -288,29 +288,82 @@ export function App() {
   );
 }
 
+type AccessMode = 'signin' | 'signup' | 'forgot' | 'reset';
+
 function AccessScreen({ onAuthenticated }: { onAuthenticated: (identity: Identity) => void }) {
+  const parameters = new URLSearchParams(window.location.search);
+  const [mode, setMode] = useState<AccessMode>(parameters.has('reset') ? 'reset' : parameters.has('oauthNew') ? 'signup' : 'signin');
+  const [name, setName] = useState(parameters.get('name') ?? '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState({ google: false, discord: false });
+  const resetToken = parameters.get('reset') ?? '';
+
+  useEffect(() => {
+    const oauthEmail = parameters.get('email');
+    if (oauthEmail) setEmail(oauthEmail);
+    const oauthError = parameters.get('oauthError');
+    if (oauthError) setError(oauthError);
+    const oauthToken = parameters.get('oauthToken');
+    window.history.replaceState({}, '', window.location.pathname);
+    fetch('/api/auth/providers').then((response) => response.json()).then((value: { google?: boolean; discord?: boolean }) => setProviders({ google: Boolean(value.google), discord: Boolean(value.discord) })).catch(() => undefined);
+    if (!oauthToken) return;
+    setBusy(true);
+    fetch('/api/auth/session', { headers: { Authorization: `Bearer ${oauthToken}` } })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message ?? 'Social sign-in could not be completed.');
+        onAuthenticated({ ...result, token: oauthToken } as Identity);
+      })
+      .catch((caught) => setError(caught instanceof Error ? caught.message : 'Social sign-in could not be completed.'))
+      .finally(() => setBusy(false));
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError('');
+    setMessage('');
     try {
-      const response = await fetch('/api/auth/web-sign-in', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      if ((mode === 'signup' || mode === 'reset') && password !== confirmPassword) throw new Error('Passwords do not match.');
+      const path = mode === 'signin' ? '/api/auth/web-sign-in' : mode === 'signup' ? '/api/auth/register' : mode === 'forgot' ? '/api/auth/request-password-reset' : '/api/auth/reset-password';
+      const body = mode === 'signin' ? { email, password }
+        : mode === 'signup' ? { name, email, password, mascotName: name ? `${name.split(' ')[0]}'s pal` : 'Nova' }
+          : mode === 'forgot' ? { email }
+            : { token: resetToken, password };
+      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.message ?? 'Unable to sign in.');
-      onAuthenticated(result as Identity);
+      if (!response.ok) throw new Error(result.message ?? 'Unable to continue.');
+      if (mode === 'signin' || mode === 'signup') onAuthenticated(result as Identity);
+      else {
+        setMessage(result.message ?? 'Done.');
+        if (mode === 'reset') {
+          setMode('signin');
+          setPassword('');
+          setConfirmPassword('');
+        }
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Unable to sign in.');
+      setError(caught instanceof Error ? caught.message : 'Unable to continue.');
     } finally {
       setBusy(false);
     }
   };
 
-  return <div className="access-page"><div className="access-art"><Logo /><div className="art-copy"><span className="kicker">ONE NOVO · THE RIGHT WORKSPACE</span><h1>Small actions.<br/><em>Visible impact.</em></h1><p>Sign in once. novo will open the member experience or Operations based on your verified role.</p></div><div className="impact-card"><div className="impact-icon"><Icon name="leaf" /></div><span><small>Connected system</small><b>Wristband to planet</b><p>verified actions stay in one shared account</p></span></div><div className="orbit orbit-one" /><div className="orbit orbit-two" /></div><section className="login-panel"><form className="login-inner auth-form" onSubmit={submit}><div className="mobile-logo"><Logo /></div><p className="eyebrow">WELCOME BACK</p><h2>Sign in to novo</h2><p className="muted">We’ll take you to the right experience automatically.</p><label className="auth-field"><span>Email</span><input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/></label><label className="auth-field"><span>Password</span><input type="password" required minLength={6} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 6 characters"/></label>{error && <p className="auth-error" role="alert">{error}</p>}<button className="primary wide" type="submit" disabled={busy}>{busy ? 'Opening novo…' : 'Continue'}<Icon name="arrow" /></button><p className="legal">Protected workspace · Your permissions follow your verified account</p></form></section></div>;
+  const copy = mode === 'signup'
+    ? { eyebrow: 'START SMALL · GROW TOGETHER', title: 'Create your novo account', subtitle: 'One account connects your wristband, mascot and impact.' }
+    : mode === 'forgot'
+      ? { eyebrow: 'ACCOUNT RECOVERY', title: 'Reset your password', subtitle: 'We’ll email a secure link to your verified address.' }
+      : mode === 'reset'
+        ? { eyebrow: 'CHOOSE A NEW PASSWORD', title: 'Set your password', subtitle: 'Use at least eight characters.' }
+        : { eyebrow: 'WELCOME BACK', title: 'Sign in to novo', subtitle: 'Continue to your member or Operations workspace.' };
+
+  const changeMode = (next: AccessMode) => { setMode(next); setError(''); setMessage(''); setPassword(''); setConfirmPassword(''); };
+  return <div className="access-page auth-reference"><section className="auth-card"><form className="login-inner auth-form" onSubmit={submit}><Logo operations={false}/><div className="auth-heading"><p className="eyebrow">{copy.eyebrow}</p><h2>{copy.title}</h2><p className="muted">{copy.subtitle}</p></div>{mode === 'signup' && <label className="auth-field"><span>Name</span><input required autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Your name"/></label>}{mode !== 'reset' && <label className="auth-field"><span>Email address</span><input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com"/></label>}{(mode === 'signin' || mode === 'signup' || mode === 'reset') && <label className="auth-field"><span>{mode === 'reset' ? 'New password' : 'Password'}</span><input type="password" required minLength={8} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters"/></label>}{(mode === 'signup' || mode === 'reset') && <label className="auth-field"><span>Confirm password</span><input type="password" required minLength={8} autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="Enter it again"/></label>}{mode === 'signin' && <button className="auth-link" type="button" onClick={() => changeMode('forgot')}>Forgot password?</button>}{error && <p className="auth-error" role="alert">{error}</p>}{message && <p className="auth-success" role="status">{message}</p>}<button className="primary wide" type="submit" disabled={busy}>{busy ? 'Please wait…' : mode === 'signin' ? 'Sign in' : mode === 'signup' ? 'Create account' : mode === 'forgot' ? 'Send reset link' : 'Update password'}<Icon name="arrow" /></button>{mode === 'signin' && (providers.google || providers.discord) && <><div className="login-divider">or continue with</div><div className="social-auth">{providers.google && <a href="/api/auth/google/start?platform=web">Google</a>}{providers.discord && <a href="/api/auth/discord/start?platform=web">Discord</a>}</div></>}{mode === 'signin' ? <p className="auth-switch">New to novo? <button type="button" onClick={() => changeMode('signup')}>Create an account</button></p> : <p className="auth-switch"><button type="button" onClick={() => changeMode('signin')}>Back to sign in</button></p>}<p className="legal">Secure access · Your permissions follow your verified account</p></form><aside className="auth-visual" aria-hidden="true"><div className="auth-visual-glow"/><img src="/novo-icon.png" alt=""/><div className="auth-visual-copy"><span>novo</span><b>Small actions.<br/>Visible impact.</b></div></aside></section></div>;
 }
 
 function DownloadExperience({ identity, onBack, onSignOut }: { identity: Identity; onBack?: () => void; onSignOut: () => void }) {
@@ -361,6 +414,20 @@ function MemberWeb({ identity, onGetApp, onSignOut }: { identity: Identity; onGe
       document.removeEventListener('visibilitychange', refreshWhenVisible);
     };
   }, [identity.token]);
+  useEffect(() => {
+    const match = window.location.pathname.match(/^\/invite\/([^/]+)\/?$/);
+    const friendId = match?.[1] ? decodeURIComponent(match[1]) : '';
+    if (!friendId || friendId === profile.id) return;
+    fetch(`/api/member/friends/${encodeURIComponent(friendId)}`, { method: 'POST', headers: { Authorization: `Bearer ${identity.token}` } })
+      .then(async (response) => {
+        const result = await response.json() as { user?: MemberProfile; message?: string };
+        if (!response.ok || !result.user) throw new Error(result.message ?? 'This invite is no longer available.');
+        window.history.replaceState({}, '', '/');
+        setProfile(result.user);
+        notify('Friend added to your circle');
+      })
+      .catch((caught) => notify(caught instanceof Error ? caught.message : 'Could not accept this invite.'));
+  }, [identity.token, profile.id]);
   const updateMember = async (path: string, body: object, success: string) => {
     if (busy) return;
     setBusy(true);
@@ -388,7 +455,7 @@ function MemberWeb({ identity, onGetApp, onSignOut }: { identity: Identity; onGe
     {active === 'home' && <MemberHome profile={profile} onCloset={() => setClosetOpen(true)} onTasks={() => setActive('tasks')} onGetApp={onGetApp} />}
     {active === 'market' && <MemberMarketplace profile={profile} busy={busy} onBuy={(id, name) => updateMember('/api/member/market/purchase', { accessoryId: id }, `${name} unlocked in your digital wardrobe`)} onContribute={(amount) => updateMember('/api/member/charity/contribute', { points: amount, causeId: 'clean-shores', causeName: 'Singapore Clean Shores' }, `${amount} leaves given to Singapore Clean Shores`)} onRedeem={() => updateMember('/api/member/market/coupon/redeem', { points: 250, offerId: 'green-cafe-5', name: '$5 Green Café coupon' }, 'Coupon saved to your rewards wallet')} />}
     {active === 'tasks' && <MemberTasks token={identity.token} />}
-    {active === 'friends' && <MemberFriends token={identity.token} onCopy={() => { navigator.clipboard?.writeText(`novo://friends/add?user=${encodeURIComponent(profile.id)}`); notify('Invite link copied'); }} />}
+    {active === 'friends' && <MemberFriends token={identity.token} onCopy={() => { navigator.clipboard?.writeText(`${window.location.origin}/invite/${encodeURIComponent(profile.id)}`); notify('Invite link copied'); }} />}
     {active === 'settings' && <MemberSettings identity={identity} profile={profile} onProfile={setProfile} onGetApp={onGetApp} onSignOut={onSignOut} notify={notify} />}
   </main>{closetOpen && <AccessoryCloset profile={profile} busy={busy} onEquip={(id, name) => updateMember('/api/member/accessories/equip', { accessoryId: id }, `${name} ${profile.equippedAccessories.includes(id) ? 'removed from' : 'equipped on'} ${profile.mascotName || 'your mascot'}`)} onClose={() => setClosetOpen(false)} onGetApp={onGetApp} />}{notice && <div className="member-notice" role="status"><Icon name="check" size={16}/>{notice}</div>}<footer className="member-footer"><span><i/>Your leaves, wardrobe and progress stay in sync with the novo app.</span><button className="text-button" onClick={onGetApp}><Icon name="phone" size={15}/>Continue in app</button></footer></div>;
 }

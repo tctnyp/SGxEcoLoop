@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
 import { z } from 'zod';
 import { initializeDatabase, persistDatabase, PersistedCollections } from './database.js';
-import { fallbackLockerLocations, getLockerDirectory, searchLockerDirectory } from './lockerDirectory.js';
+import { getLockerDirectory, LockerLocation, searchLockerDirectory } from './lockerDirectory.js';
 import { getReturnRightDirectory } from './returnRightDirectory.js';
+import { sendPasswordResetEmail } from './mailer.js';
 
 const users = new Map<string, User>();
 
@@ -97,6 +98,8 @@ type WebSession = { token: string; accountId: string; role: PortalAccount['role'
 type MobileSession = { token: string; userId: string; expiresAt: number };
 type MobileHandoff = { token: string; userId: string; expiresAt: number; consumed: boolean };
 type Credential = { email: string; salt: string; passwordHash: string };
+type PasswordReset = { token: string; email: string; expiresAt: number; used: boolean };
+type OAuthAttempt = { provider: 'google' | 'discord'; platform: 'web' | 'mobile'; expiresAt: number };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -111,6 +114,10 @@ const nfcTags = new Map<string, NfcTag>();
 const accessoryQrTags = new Map<string, AccessoryQrTag>();
 const credentials = new Map<string, Credential>();
 const weeklyEntries = new Map<string, WeeklyEntry>();
+const passwordResets = new Map<string, PasswordReset>();
+const recycleRightLocations = new Map<string, LockerLocation>();
+const pickLockerLocations = new Map<string, LockerLocation>();
+const popStationLocations = new Map<string, LockerLocation>();
 
 const persistedCollections = {
   users,
@@ -127,11 +134,22 @@ const persistedCollections = {
   mobileHandoffs,
   credentials,
   weeklyEntries,
+  passwordResets,
 } as unknown as PersistedCollections;
+
+const locationCollections = {
+  recycleRightLocations,
+  pickLockerLocations,
+  popStationLocations,
+} as unknown as PersistedCollections;
+
+const databaseCollections = { ...persistedCollections, ...locationCollections };
+
+const oauthAttempts = new Map<string, OAuthAttempt>();
 
 function passwordMatches(email: string, password: string) {
   const credential = credentials.get(email.toLowerCase());
-  if (!credential) return true;
+  if (!credential) return false;
   try {
     const expected = Buffer.from(credential.passwordHash, 'hex');
     const actual = scryptSync(password, credential.salt, expected.length);
@@ -144,6 +162,36 @@ function passwordMatches(email: string, password: string) {
 function createCredential(email: string, password: string): Credential {
   const salt = randomBytes(16).toString('hex');
   return { email: email.toLowerCase(), salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
+}
+
+function createMember(input: { name: string; email: string; mascotName: string; password?: string }) {
+  const email = input.email.toLowerCase();
+  if (users.has(email) || findPortalAccountByEmail(email)) throw Object.assign(new Error('An account already exists for this email.'), { statusCode: 409 });
+  const user: User = {
+    id: crypto.randomUUID(),
+    name: input.name,
+    email,
+    mascotName: input.mascotName,
+    mascotType: 'polar-bear',
+    wristbandColor: 'snowy-white',
+    wristbandPaired: false,
+    wristbandPickupLocation: null,
+    accessories: ['bright-star'],
+    equippedAccessories: ['bright-star'],
+    friendIds: [],
+    notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
+    streak: 0,
+    points: 0,
+    lifetimePoints: 0,
+    lastWristbandTapAt: null,
+    questBoardDate: null,
+    dailyQuests: [],
+    coupons: [],
+  };
+  users.set(email, user);
+  portalAccounts.set(user.id, { id: user.id, name: user.name, email: user.email, role: 'member', status: 'active' });
+  if (input.password) credentials.set(email, createCredential(email, input.password));
+  return user;
 }
 
 function accountView(account: PortalAccount) {
@@ -186,7 +234,7 @@ function coordinatesForSingaporeLocation(location: string) {
   return match ? { latitude: match[1], longitude: match[2] } : { latitude: null, longitude: null };
 }
 
-const databaseReady = initializeDatabase(persistedCollections).then(async () => {
+const databaseReady = initializeDatabase(databaseCollections).then(async () => {
   let changed = false;
   const now = Date.now();
   for (const [token, session] of webSessions) {
@@ -202,6 +250,11 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
   for (const [token, handoff] of mobileHandoffs) {
     if (handoff.expiresAt > now && !handoff.consumed && findUser(handoff.userId)) continue;
     mobileHandoffs.delete(token);
+    changed = true;
+  }
+  for (const [token, reset] of passwordResets) {
+    if (!reset.used && reset.expiresAt > now && findPortalAccountByEmail(reset.email)) continue;
+    passwordResets.delete(token);
     changed = true;
   }
   for (const user of users.values()) {
@@ -281,11 +334,17 @@ const databaseReady = initializeDatabase(persistedCollections).then(async () => 
   ];
   for (const [emailValue, role] of configuredRoles) {
     const email = emailValue?.trim().toLowerCase();
-    if (!email || findPortalAccountByEmail(email)) continue;
-    const name = email.split('@')[0]?.replace(/[._-]+/g, ' ') || role;
-    const account: PortalAccount = { id: `${role}_${crypto.randomUUID()}`, name, email, role, status: 'active' };
-    portalAccounts.set(account.id, account);
-    changed = true;
+    if (!email) continue;
+    if (!findPortalAccountByEmail(email)) {
+      const name = email.split('@')[0]?.replace(/[._-]+/g, ' ') || role;
+      const account: PortalAccount = { id: `${role}_${crypto.randomUUID()}`, name, email, role, status: 'active' };
+      portalAccounts.set(account.id, account);
+      changed = true;
+    }
+    if (!credentials.has(email) && process.env.NOVO_BOOTSTRAP_PASSWORD) {
+      credentials.set(email, createCredential(email, process.env.NOVO_BOOTSTRAP_PASSWORD));
+      changed = true;
+    }
   }
   if (changed) await persistDatabase(persistedCollections);
 });
@@ -300,9 +359,19 @@ const emailStatusSchema = z.object({ email: z.string().email() });
 const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
+  password: z.string().min(8).max(128).optional(),
   mascotName: z.string().trim().min(1).max(30),
   focus: z.enum(['single-use', 'food', 'repair']),
 });
+
+const webRegistrationSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  email: z.string().email(),
+  password: z.string().min(8).max(128),
+  mascotName: z.string().trim().min(1).max(30).default('Nova'),
+});
+const passwordResetRequestSchema = z.object({ email: z.string().email() });
+const passwordResetSchema = z.object({ token: z.string().min(32).max(200), password: z.string().min(8).max(128) });
 
 const pairSchema = z.object({ tagToken: z.string().trim().min(24).max(200), pickupLocation: z.string().trim().min(3).max(240).optional() });
 const pickupReservationSchema = z.object({ pickupLocation: z.string().trim().min(3).max(240) });
@@ -415,9 +484,38 @@ const accessoryNames: Record<AccessoryId, string> = {
   'bright-star': 'Bright star', 'petal-pin': 'Petal pin', 'sunny-cap': 'Sunny cap', 'trail-scarf': 'Trail scarf', 'cloud-mitts': 'Cloud mitts', 'meadow-socks': 'Meadow socks', 'tide-loop': 'Tide loop',
 };
 
-const verifiedLocations = [
-  ...fallbackLockerLocations,
-] as const;
+function replaceLocations(target: Map<string, LockerLocation>, locations: LockerLocation[]) {
+  target.clear();
+  for (const location of locations) target.set(location.id, location);
+}
+
+function cachedLockerLocations() {
+  return [...pickLockerLocations.values(), ...popStationLocations.values()];
+}
+
+function distanceKm(originLatitude: number, originLongitude: number, location: LockerLocation) {
+  const toRadians = (value: number) => value * Math.PI / 180;
+  const latitudeDelta = toRadians(location.latitude - originLatitude);
+  const longitudeDelta = toRadians(location.longitude - originLongitude);
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(toRadians(originLatitude)) * Math.cos(toRadians(location.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function sortLocationsByDistance(locations: LockerLocation[], latitude?: number, longitude?: number) {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return locations.map((location) => ({ ...location })).sort((left, right) => left.name.localeCompare(right.name, 'en-SG'));
+  }
+  return locations
+    .map((location) => ({ ...location, distanceKm: distanceKm(latitude!, longitude!, location) }))
+    .sort((left, right) => left.distanceKm - right.distanceKm || left.name.localeCompare(right.name, 'en-SG'));
+}
+
+function queryCoordinate(value: unknown, minimum: number, maximum: number) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum ? parsed : undefined;
+}
 
 const memberRewards: Partial<Record<AccessoryId, number>> = {
   'sunny-cap': 320,
@@ -623,6 +721,43 @@ function createMobileHandoff(userId: string) {
   return token;
 }
 
+function publicAppUrl() {
+  return (process.env.PUBLIC_APP_URL || 'https://novo.tancheetiong.com').replace(/\/$/, '');
+}
+
+function oauthRedirectUri(provider: OAuthAttempt['provider']) {
+  return `${publicAppUrl()}/api/auth/${provider}/callback`;
+}
+
+function oauthFailure(platform: OAuthAttempt['platform'], message: string) {
+  const destination = platform === 'mobile' ? 'novo://auth/oauth' : `${publicAppUrl()}/`;
+  return `${destination}?oauthError=${encodeURIComponent(message)}`;
+}
+
+async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: { email: string; name: string }) {
+  const email = profile.email.toLowerCase();
+  const account = findPortalAccountByEmail(email);
+  const user = users.get(email);
+  if (!account || !user) {
+    const destination = attempt.platform === 'mobile' ? 'novo://auth/oauth' : `${publicAppUrl()}/`;
+    response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}`);
+    return;
+  }
+  if (account.status !== 'active') {
+    response.redirect(oauthFailure(attempt.platform, 'This account is not active.'));
+    return;
+  }
+  if (attempt.platform === 'mobile') {
+    const token = createMobileSession(user.id);
+    await persistDatabase(persistedCollections);
+    response.redirect(`novo://auth/oauth?token=${encodeURIComponent(token)}`);
+    return;
+  }
+  const session = createWebSession(account);
+  await persistDatabase(persistedCollections);
+  response.redirect(`${publicAppUrl()}/?oauthToken=${encodeURIComponent(session.token)}`);
+}
+
 function sessionFromRequest(request: Request) {
   const authorization = request.header('authorization');
   const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
@@ -697,6 +832,120 @@ app.use((request, response, next) => {
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true, service: 'novo-api' });
+});
+
+app.get('/api/auth/providers', (_request, response) => {
+  response.json({
+    google: Boolean(process.env.GOOGLE_WEB_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    discord: Boolean(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET),
+  });
+});
+
+app.get('/api/auth/:provider/start', (request, response) => {
+  const provider = routeParam(request.params.provider);
+  if (provider !== 'google' && provider !== 'discord') return response.status(404).json({ message: 'Unknown sign-in provider.' });
+  const platform = request.query.platform === 'mobile' ? 'mobile' : 'web';
+  const clientId = provider === 'google' ? process.env.GOOGLE_WEB_CLIENT_ID : process.env.DISCORD_CLIENT_ID;
+  const clientSecret = provider === 'google' ? process.env.GOOGLE_CLIENT_SECRET : process.env.DISCORD_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return response.redirect(oauthFailure(platform, `${provider === 'google' ? 'Google' : 'Discord'} sign-in is not configured yet.`));
+  const state = randomBytes(32).toString('hex');
+  oauthAttempts.set(state, { provider, platform, expiresAt: Date.now() + 10 * 60 * 1000 });
+  for (const [key, attempt] of oauthAttempts) if (attempt.expiresAt <= Date.now()) oauthAttempts.delete(key);
+  const parameters = new URLSearchParams({ client_id: clientId, redirect_uri: oauthRedirectUri(provider), response_type: 'code', state });
+  if (provider === 'google') {
+    parameters.set('scope', 'openid email profile');
+    parameters.set('prompt', 'select_account');
+    response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${parameters}`);
+  } else {
+    parameters.set('scope', 'identify email');
+    response.redirect(`https://discord.com/oauth2/authorize?${parameters}`);
+  }
+});
+
+app.get('/api/auth/google/callback', async (request, response) => {
+  const state = typeof request.query.state === 'string' ? request.query.state : '';
+  const code = typeof request.query.code === 'string' ? request.query.code : '';
+  const attempt = oauthAttempts.get(state);
+  if (!attempt || attempt.provider !== 'google' || attempt.expiresAt <= Date.now() || !code) return response.redirect(oauthFailure(attempt?.platform ?? 'web', 'Google sign-in expired. Please try again.'));
+  oauthAttempts.delete(state);
+  try {
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: process.env.GOOGLE_WEB_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, redirect_uri: oauthRedirectUri('google'), grant_type: 'authorization_code' }) });
+    if (!tokenResponse.ok) throw new Error('Google did not accept the authorization code.');
+    const token = await tokenResponse.json() as { access_token?: string };
+    const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', { headers: { Authorization: `Bearer ${token.access_token}` } });
+    const profile = await profileResponse.json() as { email?: string; name?: string; email_verified?: boolean };
+    if (!profileResponse.ok || !profile.email || profile.email_verified !== true) throw new Error('Google did not return a verified email address.');
+    await finishOAuth(response, attempt, { email: profile.email, name: profile.name || profile.email.split('@')[0] || 'Novo member' });
+  } catch (error) {
+    response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Google sign-in failed.'));
+  }
+});
+
+app.get('/api/auth/discord/callback', async (request, response) => {
+  const state = typeof request.query.state === 'string' ? request.query.state : '';
+  const code = typeof request.query.code === 'string' ? request.query.code : '';
+  const attempt = oauthAttempts.get(state);
+  if (!attempt || attempt.provider !== 'discord' || attempt.expiresAt <= Date.now() || !code) return response.redirect(oauthFailure(attempt?.platform ?? 'web', 'Discord sign-in expired. Please try again.'));
+  oauthAttempts.delete(state);
+  try {
+    const tokenResponse = await fetch('https://discord.com/api/oauth2/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: process.env.DISCORD_CLIENT_ID!, client_secret: process.env.DISCORD_CLIENT_SECRET!, redirect_uri: oauthRedirectUri('discord'), grant_type: 'authorization_code' }) });
+    if (!tokenResponse.ok) throw new Error('Discord did not accept the authorization code.');
+    const token = await tokenResponse.json() as { access_token?: string };
+    const profileResponse = await fetch('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${token.access_token}` } });
+    const profile = await profileResponse.json() as { email?: string; global_name?: string; username?: string; verified?: boolean };
+    if (!profileResponse.ok || !profile.email || profile.verified !== true) throw new Error('Discord requires a verified email address for novo sign-in.');
+    await finishOAuth(response, attempt, { email: profile.email, name: profile.global_name || profile.username || profile.email.split('@')[0] || 'Novo member' });
+  } catch (error) {
+    response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Discord sign-in failed.'));
+  }
+});
+
+app.post('/api/auth/register', async (request, response, next) => {
+  try {
+    const input = webRegistrationSchema.parse(request.body);
+    const user = createMember(input);
+    const account = portalAccounts.get(user.id)!;
+    const session = createWebSession(account);
+    await persistDatabase(persistedCollections);
+    response.status(201).json({ token: session.token, account, role: account.role, destination: 'member-web', member: user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/request-password-reset', async (request, response, next) => {
+  try {
+    const { email } = passwordResetRequestSchema.parse(request.body);
+    const normalizedEmail = email.toLowerCase();
+    const account = findPortalAccountByEmail(normalizedEmail);
+    if (account) {
+      for (const [token, reset] of passwordResets) if (reset.email === normalizedEmail) passwordResets.delete(token);
+      const token = randomBytes(32).toString('hex');
+      passwordResets.set(token, { token, email: normalizedEmail, expiresAt: Date.now() + 30 * 60 * 1000, used: false });
+      await persistDatabase(persistedCollections);
+      await sendPasswordResetEmail({ to: normalizedEmail, name: account.name, token });
+    }
+    response.status(202).json({ message: 'If that email belongs to a novo account, a reset link is on its way.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/reset-password', async (request, response, next) => {
+  try {
+    const { token, password } = passwordResetSchema.parse(request.body);
+    const reset = passwordResets.get(token);
+    if (!reset || reset.used || reset.expiresAt <= Date.now()) return response.status(400).json({ message: 'This password-reset link is invalid or has expired.' });
+    reset.used = true;
+    credentials.set(reset.email, createCredential(reset.email, password));
+    for (const [sessionToken, session] of webSessions) if (findPortalAccountByEmail(reset.email)?.id === session.accountId) webSessions.delete(sessionToken);
+    const user = users.get(reset.email);
+    if (user) for (const [sessionToken, session] of mobileSessions) if (session.userId === user.id) mobileSessions.delete(sessionToken);
+    await persistDatabase(persistedCollections);
+    response.json({ message: 'Your password has been updated. You can sign in now.' });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/auth/email-status', (request, response, next) => {
@@ -814,29 +1063,7 @@ app.post('/api/auth/google', async (request, response, next) => {
 app.post('/api/auth/onboarding', async (request, response, next) => {
   try {
     const input = onboardingSchema.parse(request.body);
-    const user: User = {
-      id: crypto.randomUUID(),
-      name: input.name,
-      email: input.email.toLowerCase(),
-      mascotName: input.mascotName,
-      mascotType: 'polar-bear',
-      wristbandColor: 'snowy-white',
-      wristbandPaired: false,
-      wristbandPickupLocation: null,
-      accessories: ['bright-star'],
-      equippedAccessories: ['bright-star'],
-      friendIds: [],
-      notificationPreferences: { dailyGreeting: true, tasks: true, events: true, friends: true, orders: true },
-      streak: 0,
-      points: 0,
-      lifetimePoints: 0,
-      lastWristbandTapAt: null,
-      questBoardDate: null,
-      dailyQuests: [],
-      coupons: [],
-    };
-    users.set(user.email, user);
-    portalAccounts.set(user.id, { id: user.id, name: user.name, email: user.email, role: 'member', status: 'active' });
+    const user = createMember(input);
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
     response.status(201).json({ isNewUser: false, token, user });
@@ -1172,11 +1399,23 @@ app.patch('/api/member/notifications', (request, response, next) => {
 
 app.get('/api/locations', async (request, response, next) => {
   try {
-    const directory = await getReturnRightDirectory({ offline: process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE === '1' });
-    const allLocations = [...verifiedLocations, ...directory.locations];
+    const [returnRightDirectory, lockerDirectory] = await Promise.all([
+      getReturnRightDirectory({ offline: process.env.NOVO_RETURN_RIGHT_DIRECTORY_OFFLINE === '1', persisted: [...recycleRightLocations.values()] }),
+      getLockerDirectory({ offline: process.env.NOVO_LOCKER_DIRECTORY_OFFLINE === '1', persisted: cachedLockerLocations() }),
+    ]);
+    if (returnRightDirectory.source !== 'fallback') replaceLocations(recycleRightLocations, returnRightDirectory.locations);
+    if (lockerDirectory.source !== 'fallback') {
+      replaceLocations(pickLockerLocations, lockerDirectory.lockers.filter((location) => location.kind === 'pick-locker'));
+      replaceLocations(popStationLocations, lockerDirectory.lockers.filter((location) => location.kind === 'singpost-locker'));
+    }
+    if (returnRightDirectory.source === 'live' || lockerDirectory.source === 'live') await persistDatabase(locationCollections);
+    const allLocations = [...returnRightDirectory.locations, ...lockerDirectory.lockers];
     const kind = typeof request.query.kind === 'string' ? request.query.kind : '';
-    const locations = kind ? allLocations.filter((location) => location.kind === kind) : allLocations;
-    response.json({ locations, total: locations.length, returnRightTotal: directory.locations.length, updatedAt: directory.updatedAt, source: directory.source, liveReturnRightUrl: 'https://returnright.sg/p/find-my-nearest-rvm' });
+    const latitude = queryCoordinate(request.query.lat, -90, 90);
+    const longitude = queryCoordinate(request.query.lng, -180, 180);
+    const matching = kind ? allLocations.filter((location) => location.kind === kind) : allLocations;
+    const locations = sortLocationsByDistance(matching, latitude, longitude);
+    response.json({ locations, total: locations.length, returnRightTotal: returnRightDirectory.locations.length, sourceCounts: lockerDirectory.sourceCounts, updatedAt: new Date().toISOString(), source: { returnRight: returnRightDirectory.source, lockers: lockerDirectory.source }, liveReturnRightUrl: 'https://www.recycle.gov.sg/locations' });
   } catch (error) {
     next(error);
   }
@@ -1186,11 +1425,18 @@ app.get('/api/member/wristband/pickup-locations', async (request, response, next
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
   try {
-    const directory = await getLockerDirectory({ offline: process.env.NOVO_LOCKER_DIRECTORY_OFFLINE === '1' });
+    const directory = await getLockerDirectory({ offline: process.env.NOVO_LOCKER_DIRECTORY_OFFLINE === '1', persisted: cachedLockerLocations() });
+    if (directory.source !== 'fallback') {
+      replaceLocations(pickLockerLocations, directory.lockers.filter((location) => location.kind === 'pick-locker'));
+      replaceLocations(popStationLocations, directory.lockers.filter((location) => location.kind === 'singpost-locker'));
+      if (directory.source === 'live') await persistDatabase(locationCollections);
+    }
     const query = typeof request.query.q === 'string' ? request.query.q : '';
     const provider = typeof request.query.provider === 'string' ? request.query.provider.toLowerCase() : undefined;
-    const lockers = searchLockerDirectory(directory.lockers, query, provider);
-    response.json({ lockers, total: lockers.length, directoryTotal: directory.lockers.length, sourceCounts: directory.sourceCounts, updatedAt: directory.updatedAt });
+    const latitude = queryCoordinate(request.query.lat, -90, 90);
+    const longitude = queryCoordinate(request.query.lng, -180, 180);
+    const lockers = sortLocationsByDistance(searchLockerDirectory(directory.lockers, query, provider), latitude, longitude);
+    response.json({ lockers, total: lockers.length, directoryTotal: directory.lockers.length, sourceCounts: directory.sourceCounts, updatedAt: directory.updatedAt, source: directory.source });
   } catch (error) {
     next(error);
   }
@@ -1670,6 +1916,10 @@ if (existsSync(webDistPath)) {
 app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
   if (error instanceof z.ZodError) {
     response.status(400).json({ message: error.issues[0]?.message ?? 'Invalid request.', issues: error.issues });
+    return;
+  }
+  if (error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number') {
+    response.status(error.statusCode).json({ message: error.message });
     return;
   }
   console.error(error);

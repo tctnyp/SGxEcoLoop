@@ -61,6 +61,7 @@ export type NovoLocation = {
   longitude: number;
   hours: string;
   sourceUrl: string;
+  distanceKm?: number;
 };
 
 export type NovoEvent = {

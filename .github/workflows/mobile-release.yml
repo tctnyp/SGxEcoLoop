@@ -37,6 +37,8 @@ jobs:
     env:
       NOVO_BUILD_ENV: ${{ matrix.environment }}
       EXPO_PUBLIC_API_URL: ${{ matrix.api_url }}
+      EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID: ${{ vars.GOOGLE_ANDROID_CLIENT_ID }}
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
 
     steps:
       - name: Check out repository
@@ -102,6 +104,8 @@ jobs:
     env:
       NOVO_BUILD_ENV: ${{ matrix.environment }}
       EXPO_PUBLIC_API_URL: ${{ matrix.api_url }}
+      EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: ${{ vars.GOOGLE_IOS_CLIENT_ID }}
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: ${{ vars.GOOGLE_WEB_CLIENT_ID }}
 
     steps:
       - name: Check out repository

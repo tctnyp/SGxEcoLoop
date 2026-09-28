@@ -128,21 +128,34 @@ async function retrievePopStations() {
   return parsePopStationDirectory(await response.json());
 }
 
-let cache: { expiresAt: number; updatedAt: string; lockers: LockerLocation[]; sourceCounts: { pick: number; popStation: number } } | null = null;
+type LockerDirectory = {
+  expiresAt: number;
+  updatedAt: string;
+  lockers: LockerLocation[];
+  sourceCounts: { pick: number; popStation: number };
+  source: 'live' | 'cached' | 'fallback';
+};
 
-export async function getLockerDirectory(options: { refresh?: boolean; offline?: boolean } = {}) {
+let cache: LockerDirectory | null = null;
+
+export async function getLockerDirectory(options: { refresh?: boolean; offline?: boolean; persisted?: LockerLocation[] } = {}) {
   if (!options.refresh && cache && cache.expiresAt > Date.now()) return cache;
   if (options.offline) {
-    const offline = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), lockers: fallbackLockerLocations, sourceCounts: { pick: 3, popStation: 3 } };
+    const stored = options.persisted?.filter((location) => location.kind === 'pick-locker' || location.kind === 'singpost-locker') ?? [];
+    const lockers = stored.length ? stored : fallbackLockerLocations;
+    const offline: LockerDirectory = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), lockers, sourceCounts: { pick: lockers.filter((location) => location.kind === 'pick-locker').length, popStation: lockers.filter((location) => location.kind === 'singpost-locker').length }, source: stored.length ? 'cached' : 'fallback' };
     cache = offline;
     return offline;
   }
 
   const [pickResult, popResult] = await Promise.allSettled([retrievePickLockers(), retrievePopStations()]);
-  const pick = pickResult.status === 'fulfilled' ? pickResult.value : fallbackLockerLocations.filter((locker) => locker.kind === 'pick-locker');
-  const popStation = popResult.status === 'fulfilled' ? popResult.value : fallbackLockerLocations.filter((locker) => locker.kind === 'singpost-locker');
+  const persistedPick = options.persisted?.filter((locker) => locker.kind === 'pick-locker') ?? [];
+  const persistedPopStation = options.persisted?.filter((locker) => locker.kind === 'singpost-locker') ?? [];
+  const pick = pickResult.status === 'fulfilled' ? pickResult.value : persistedPick.length ? persistedPick : fallbackLockerLocations.filter((locker) => locker.kind === 'pick-locker');
+  const popStation = popResult.status === 'fulfilled' ? popResult.value : persistedPopStation.length ? persistedPopStation : fallbackLockerLocations.filter((locker) => locker.kind === 'singpost-locker');
   const lockers = [...pick, ...popStation].sort((left, right) => left.name.localeCompare(right.name, 'en-SG'));
-  cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), lockers, sourceCounts: { pick: pick.length, popStation: popStation.length } };
+  const liveCount = Number(pickResult.status === 'fulfilled') + Number(popResult.status === 'fulfilled');
+  cache = { expiresAt: Date.now() + CACHE_TTL_MS, updatedAt: new Date().toISOString(), lockers, sourceCounts: { pick: pick.length, popStation: popStation.length }, source: liveCount === 2 ? 'live' : liveCount === 0 && (persistedPick.length || persistedPopStation.length) ? 'cached' : 'fallback' };
   return cache;
 }
 

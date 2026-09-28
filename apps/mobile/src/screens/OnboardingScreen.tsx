@@ -28,6 +28,8 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
   const [name, setName] = useState(draft?.name ?? '');
   const [email, setEmail] = useState(draft?.email ?? '');
   const [mascotName, setMascotName] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [focus, setFocus] = useState('single-use');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39,7 +41,9 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
     setLoading(true);
     setError('');
     try {
-      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), mascotName: normalizedMascotName, focus }));
+      if (password.length < 8) throw new Error('Use at least 8 characters for your password.');
+      if (password !== confirmPassword) throw new Error('Passwords do not match.');
+      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), password, mascotName: normalizedMascotName, focus }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'We could not create your profile. Try again.');
     } finally {
@@ -73,9 +77,11 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                 <View style={styles.fields}>
                   <TextField label="Your name" value={name} onChangeText={setName} placeholder="What should we call you?" icon="person-outline" />
                   <TextField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" icon="mail-outline" />
+                  <TextField label="Password" value={password} onChangeText={setPassword} placeholder="At least 8 characters" secure icon="lock-closed-outline" />
+                  <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Enter it again" secure icon="shield-checkmark-outline" />
                   <TextField label="Mascot name" value={mascotName} onChangeText={setMascotName} placeholder="Name your in-app mascot" icon="leaf-outline" />
                 </View>
-                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@')} icon="arrow-forward" />
+                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@') || password.length < 8 || password !== confirmPassword} icon="arrow-forward" />
               </>
             ) : (
               <>

@@ -80,9 +80,17 @@ export function continueWithGoogle(credential = ''): Promise<AuthResult> {
   });
 }
 
+export function requestPasswordReset(email: string): Promise<{ message: string }> {
+  return request<{ message: string }>('/auth/request-password-reset', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
 export function finishOnboarding(input: {
   name: string;
   email: string;
+  password: string;
   mascotName: string;
   focus: string;
 }): Promise<AuthResult> {
@@ -142,8 +150,9 @@ export async function getLocations(kind?: NovoLocation['kind']): Promise<NovoLoc
   return result.locations;
 }
 
-export async function getWristbandPickupLocations(token: string): Promise<NovoLocation[]> {
-  const result = await request<{ lockers: NovoLocation[] }>('/member/wristband/pickup-locations', undefined, token);
+export async function getWristbandPickupLocations(token: string, coordinates?: { latitude: number; longitude: number }): Promise<NovoLocation[]> {
+  const query = coordinates ? `?lat=${encodeURIComponent(coordinates.latitude)}&lng=${encodeURIComponent(coordinates.longitude)}` : '';
+  const result = await request<{ lockers: NovoLocation[] }>(`/member/wristband/pickup-locations${query}`, undefined, token);
   return result.lockers;
 }
 

@@ -129,8 +129,10 @@ export default function App() {
 
     const captureFriendInvite = (url: string | null) => {
       if (!url) return null;
-      const match = url.match(/^novo:\/\/friends\/add\?(?:[^#]*&)?user=([^&#]+)/);
-      const friendId = match?.[1] ? decodeURIComponent(match[1]) : null;
+      const deepLinkMatch = url.match(/^novo:\/\/friends\/add\?(?:[^#]*&)?user=([^&#]+)/);
+      const webLinkMatch = url.match(/^https?:\/\/[^/]+\/invite\/([^/?#]+)/);
+      const encodedFriendId = deepLinkMatch?.[1] ?? webLinkMatch?.[1];
+      const friendId = encodedFriendId ? decodeURIComponent(encodedFriendId) : null;
       if (friendId) pendingFriendRef.current = friendId;
       return friendId;
     };
@@ -218,7 +220,7 @@ export default function App() {
   const handleProfileCreated = (result: AuthResult) => handleAuth(result);
 
   const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
-  const handleLoadWristbandPickupLocations = useCallback(() => getWristbandPickupLocations(requireToken()), []);
+  const handleLoadWristbandPickupLocations = useCallback((coordinates?: { latitude: number; longitude: number }) => getWristbandPickupLocations(requireToken(), coordinates), []);
   const handleReserveWristbandPickup = async (pickupLocation: string) => {
     const updated = await reserveWristbandPickup(requireToken(), pickupLocation);
     await saveUser(updated);
