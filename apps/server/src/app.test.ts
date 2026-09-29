@@ -184,6 +184,7 @@ describe('novo API', () => {
     assert.equal(interacted.body.user.streak, 1);
     assert.equal(interacted.body.user.dailyQuests.length, 3);
     assert.ok(interacted.body.user.dailyQuests[0].title);
+    assert.equal(interacted.body.user.dailyQuests[0].sourceAccessoryId, 'bright-star');
     assert.equal(interacted.body.daily.questsRefreshed, true);
     const repeated = await request(app).post('/api/member/wristband/interact').set('authorization', authorization).send({ tagToken });
     assert.equal(repeated.status, 200);
@@ -212,6 +213,20 @@ describe('novo API', () => {
     assert.equal(reviewed.body.user.lifetimePoints, 80);
     const queue = await request(app).get('/api/portal/submissions').set('x-novo-role', 'staff');
     assert.ok(!queue.body.submissions.some((submission: { id: string }) => submission.id === submitted.body.submission.id));
+  });
+
+  it('requires actionable review feedback and returns it to the member', async () => {
+    const member = await createMember('review-feedback@example.com');
+    const submitted = await request(app).post('/api/member/tasks/custom').set('authorization', member.authorization).send({ title: 'Reusable lunch kit', description: 'Packed lunch with a reusable container and cutlery.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('review-feedback-photo').toString('base64')}` });
+    const withoutFeedback = await request(app).post(`/api/portal/submissions/${submitted.body.submission.id}/review`).set('x-novo-role', 'staff').send({ decision: 'changes_requested', points: 0 });
+    assert.equal(withoutFeedback.status, 400);
+    const reviewed = await request(app).post(`/api/portal/submissions/${submitted.body.submission.id}/review`).set('x-novo-role', 'staff').send({ decision: 'changes_requested', points: 0, note: 'Retake the photo with the reusable container clearly visible.' });
+    assert.equal(reviewed.status, 200);
+    const tasks = await request(app).get('/api/member/tasks').set('authorization', member.authorization);
+    const result = tasks.body.submissions.find((submission: { id: string }) => submission.id === submitted.body.submission.id);
+    assert.equal(result.status, 'changes_requested');
+    assert.match(result.reviewNote, /container clearly visible/);
+    assert.equal(result.photoDataUrl, undefined);
   });
 
   it('stores detailed YOLO results and automatically rewards accepted evidence', async () => {
@@ -299,7 +314,15 @@ describe('novo API', () => {
     assert.equal(redeemed.body.user.points, 50);
   });
 
-  it('provides CRUD operations for events, marketplace items and accounts', async () => {
+  it('provides CRUD operations for task templates, events, marketplace items and accounts', async () => {
+    const createdTemplate = await request(app).post('/api/portal/task-templates').set('x-novo-role', 'staff').send({ title: 'Refill a travel bottle', description: 'Show a travel bottle being refilled at a water point.', points: 40, kind: 'photo', accessoryId: 'tide-loop', active: true });
+    assert.equal(createdTemplate.status, 201);
+    const changedTemplate = await request(app).patch(`/api/portal/task-templates/${createdTemplate.body.template.id}`).set('x-novo-role', 'staff').send({ points: 45, active: false });
+    assert.equal(changedTemplate.body.template.points, 45);
+    const templateList = await request(app).get('/api/portal/task-templates').set('x-novo-role', 'staff');
+    assert.ok(templateList.body.templates.some((template: { id: string }) => template.id === createdTemplate.body.template.id));
+    assert.equal((await request(app).delete(`/api/portal/task-templates/${createdTemplate.body.template.id}`).set('x-novo-role', 'admin')).status, 204);
+
     const createdEvent = await request(app).post('/api/portal/events').set('x-novo-role', 'admin').send({ organizerId: 'admin', title: 'CRUD cleanup walk', location: 'Tampines', startsAt: new Date(Date.now() + 86_400_000).toISOString(), durationMinutes: 60, capacity: 20, points: 50, status: 'draft' });
     assert.equal(createdEvent.status, 201);
     const changedEvent = await request(app).patch(`/api/portal/events/${createdEvent.body.event.id}`).set('x-novo-role', 'admin').send({ status: 'open', points: 70 });
@@ -421,15 +444,15 @@ describe('novo API', () => {
     assert.equal((await request(app).post('/api/member/weekly/complete').set('authorization', member.authorization).send({ answers })).status, 409);
   });
 
-  it('allows an organizer to verify completed attendance by paired wristband', async () => {
+  it('allows an organizer to verify attendance by paired wristband during the event window', async () => {
     const member = await createMember('attendee@example.com');
-    const startsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const startsAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const created = await request(app).post('/api/portal/events').set('x-novo-role', 'organizer').send({ organizerId: 'organizer', title: 'Community repair circle', location: 'Bedok Community Centre', startsAt, durationMinutes: 120, capacity: null, points: 140, status: 'open' });
     assert.equal(created.status, 201);
     assert.equal(typeof created.body.event.latitude, 'number');
     assert.equal(typeof created.body.event.longitude, 'number');
     const memberTasks = await request(app).get('/api/member/tasks').set('authorization', member.authorization);
-    assert.ok(memberTasks.body.events.some((event: { id: string; status: string }) => event.id === created.body.event.id && event.status === 'scheduled'));
+    assert.ok(memberTasks.body.events.some((event: { id: string; status: string }) => event.id === created.body.event.id && event.status === 'live'));
     const registered = await request(app).post(`/api/member/events/${created.body.event.id}/signup`).set('authorization', member.authorization);
     assert.equal(registered.status, 200);
     assert.equal(registered.body.event.registered, true);
@@ -442,6 +465,16 @@ describe('novo API', () => {
     assert.equal(checkedIn.body.pointsAwarded, 140);
     const repeated = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ tagToken });
     assert.equal(repeated.status, 409);
+  });
+
+  it('allows members to cancel a future event registration', async () => {
+    const member = await createMember('cancel-event@example.com');
+    const created = await request(app).post('/api/portal/events').set('x-novo-role', 'admin').send({ organizerId: 'admin', title: 'Future refill workshop', location: 'Tampines', startsAt: new Date(Date.now() + 86_400_000).toISOString(), durationMinutes: 60, capacity: 20, points: 50, status: 'open' });
+    await request(app).post(`/api/member/events/${created.body.event.id}/signup`).set('authorization', member.authorization);
+    const cancelled = await request(app).delete(`/api/member/events/${created.body.event.id}/signup`).set('authorization', member.authorization);
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.event.registered, false);
+    assert.equal(cancelled.body.event.attending, 0);
   });
 
   it('routes configured operations roles to the operations portal', async () => {

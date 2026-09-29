@@ -4,7 +4,7 @@ export type AccountStatus = 'active' | 'limited' | 'suspended';
 export type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
 export type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 
-export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; lesson?: { title: string; summary: string; question: string; options: string[] } };
+export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; sourceAccessoryId?: AccessoryId; lesson?: { title: string; summary: string; question: string; options: string[] } };
 export type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 export type AccessoryId =
@@ -86,7 +86,7 @@ export type NovoEvent = {
   longitude: number | null;
 };
 
-export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string };
+export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; questId?: string; reviewNote?: string | null; reviewedAt?: string | null };
 export type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
 export type WeeklyCompetition = {
   id: string;

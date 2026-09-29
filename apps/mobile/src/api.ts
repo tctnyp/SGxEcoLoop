@@ -53,18 +53,36 @@ export function setAccountStatusListener(listener: ((status: AccountStatus) => v
 }
 
 async function request<T>(path: string, options?: RequestInit, token?: string): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_URL}${path}`, {
-      ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...options?.headers,
-      },
-    });
-  } catch {
-    throw new Error(`novo could not reach ${API_URL}. Check that the server is running and that this phone is on the same network.`);
+  const method = options?.method?.toUpperCase() ?? 'GET';
+  const attempts = method === 'GET' ? 2 : 1;
+  let response: Response | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), method === 'GET' ? 15_000 : 45_000);
+    try {
+      response = await fetch(`${API_URL}${path}`, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...options?.headers,
+        },
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 450));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  if (!response) {
+    const timedOut = lastError instanceof Error && lastError.name === 'AbortError';
+    throw new Error(timedOut
+      ? 'The server took too long to respond. Check your connection and try again.'
+      : `novo could not reach ${API_URL}. Check that the server is running and that this phone is on the same network.`);
   }
 
   if (!response.ok) {
@@ -239,6 +257,11 @@ export async function submitDailyQuiz(token: string, questId: string, answer: st
 
 export async function signUpForEvent(token: string, eventId: string): Promise<NovoEvent> {
   const result = await request<{ event: NovoEvent }>(`/member/events/${encodeURIComponent(eventId)}/signup`, { method: 'POST' }, token);
+  return result.event;
+}
+
+export async function cancelEventSignup(token: string, eventId: string): Promise<NovoEvent> {
+  const result = await request<{ event: NovoEvent }>(`/member/events/${encodeURIComponent(eventId)}/signup`, { method: 'DELETE' }, token);
   return result.event;
 }
 
