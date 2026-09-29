@@ -108,5 +108,5 @@ export type AuthResult = {
   accountStatus?: AccountStatus;
   token?: string;
   user?: User;
-  draft?: Pick<User, 'name' | 'email'>;
+  draft?: Pick<User, 'name' | 'email'> & { oauthProvider?: OAuthProvider; oauthOnboardingToken?: string };
 };

@@ -126,8 +126,8 @@ export function requestPasswordReset(email: string): Promise<{ message: string }
 export function finishOnboarding(input: {
   name: string;
   email: string;
-  password: string;
-  focus: string;
+  password?: string;
+  oauthOnboardingToken?: string;
 }): Promise<AuthResult> {
   return request<AuthResult>('/auth/onboarding', {
     method: 'POST',

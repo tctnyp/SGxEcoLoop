@@ -49,6 +49,7 @@ type PurposeOffer = { id: string; name: string; type: 'coupon' | 'charity'; deta
 type MarketSelection = { kind: 'accessory'; offer: AccessoryOffer } | { kind: 'purpose'; purpose: PurposeOffer };
 
 const defaultPalette = createAccessoryColorScheme([]);
+const useNativeAnimationDriver = Platform.OS !== 'web';
 const DynamicSchemeContext = createContext<Palette>(defaultPalette);
 const useDynamicScheme = () => useContext(DynamicSchemeContext);
 
@@ -462,6 +463,10 @@ function categoryLabel(category: AccessoryCategory) {
   return category === 'mitts' ? 'Hand mitts' : category.charAt(0).toUpperCase() + category.slice(1);
 }
 
+function DataStatePanel({ palette, title, detail, loading, actionLabel, onAction }: { palette: Palette; title: string; detail: string; loading?: boolean; actionLabel?: string; onAction?: () => void }) {
+  return <View accessibilityRole={loading ? undefined : 'summary'} style={[styles.dataState, { backgroundColor: withAlpha(palette.surfaceBright, 0.76), borderColor: palette.outlineVariant }]}>{loading ? <ActivityIndicator color={palette.deep} /> : <View style={[styles.dataStateIcon, { backgroundColor: palette.primaryContainer }]}><Ionicons name={actionLabel ? 'cloud-offline-outline' : 'sparkles-outline'} size={21} color={palette.onPrimaryContainer} /></View>}<View style={styles.dataStateCopy}><Text style={[styles.dataStateTitle, { color: palette.onSurface }]}>{title}</Text><Text style={[styles.dataStateDetail, { color: palette.onSurfaceVariant }]}>{detail}</Text></View>{actionLabel && onAction ? <Pressable onPress={onAction} accessibilityRole="button" style={[styles.dataStateAction, { backgroundColor: palette.deep }]}><Text style={styles.dataStateActionText}>{actionLabel}</Text></Pressable> : null}</View>;
+}
+
 function MarketplacePage({ user, token, palette, onPurchase, onContribute, onRedeemCoupon }: { user: User; token: string; palette: Palette; onPurchase: (id: AccessoryId, cost: number) => Promise<void>; onContribute: (points: number, causeId: string, causeName: string) => Promise<void>; onRedeemCoupon: (points: number, offerId: string, name: string) => Promise<void> }) {
   const [marketTab, setMarketTab] = useState<'accessories' | 'impact'>('accessories');
   const marketScrollRef = useRef<ScrollView>(null);
@@ -469,9 +474,23 @@ function MarketplacePage({ user, token, palette, onPurchase, onContribute, onRed
   const [success, setSuccess] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [marketItems, setMarketItems] = useState<MarketItem[]>([]);
-  useEffect(() => { getMemberMarket(token).then(({ items }) => setMarketItems(items)).catch(() => setMarketItems([])); }, [token]);
-  const offers: AccessoryOffer[] = marketItems.filter((item) => item.category === 'accessory' && item.accessoryId).map((item) => ({ id: item.accessoryId!, price: item.price, description: item.description, imageDataUrl: item.imageDataUrl }));
-  const purposes: PurposeOffer[] = marketItems.filter((item) => item.category !== 'accessory').map((item) => ({ id: item.id, type: item.category as 'coupon' | 'charity', name: item.name, detail: item.description, description: item.description, icon: item.category === 'coupon' ? 'ticket' : 'heart', points: item.price, imageDataUrl: item.imageDataUrl }));
+  const [marketLoading, setMarketLoading] = useState(true);
+  const [marketError, setMarketError] = useState('');
+  const loadMarket = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketError('');
+    try {
+      const { items } = await getMemberMarket(token);
+      setMarketItems(items);
+    } catch (reason) {
+      setMarketError(reason instanceof Error ? reason.message : 'The marketplace could not be loaded.');
+    } finally {
+      setMarketLoading(false);
+    }
+  }, [token]);
+  useEffect(() => { void loadMarket(); }, [loadMarket]);
+  const offers = useMemo<AccessoryOffer[]>(() => marketItems.filter((item) => item.category === 'accessory' && item.accessoryId).map((item) => ({ id: item.accessoryId!, price: item.price, description: item.description, imageDataUrl: item.imageDataUrl })), [marketItems]);
+  const purposes = useMemo<PurposeOffer[]>(() => marketItems.filter((item) => item.category !== 'accessory').map((item) => ({ id: item.id, type: item.category as 'coupon' | 'charity', name: item.name, detail: item.description, description: item.description, icon: item.category === 'coupon' ? 'ticket' : 'heart', points: item.price, imageDataUrl: item.imageDataUrl })), [marketItems]);
   const closeSheet = () => { setSelection(null); setSuccess(false); setProcessing(false); };
   const confirmSelection = async () => {
     if (!selection || processing) return;
@@ -500,7 +519,7 @@ function MarketplacePage({ user, token, palette, onPurchase, onContribute, onRed
 
   return (
     <View style={styles.pagePad}>
-      <PageTitle eyebrow="SPEND WITH PURPOSE" title="Marketplace" right={<View style={[styles.balance, { backgroundColor: palette.primary }]}><Ionicons name="leaf" size={16} color={palette.onPrimary} /><Text style={[styles.balanceText, { color: palette.onPrimary }]}>{user.points}</Text></View>} />
+      <PageTitle eyebrow="SPEND WITH PURPOSE" title="Marketplace" right={<View accessibilityLabel={`${user.points.toLocaleString()} leaves available`} style={[styles.balance, { backgroundColor: palette.primary }]}><Ionicons name="leaf" size={16} color={palette.onPrimary} /><Text style={[styles.balanceText, { color: palette.onPrimary }]}>{user.points.toLocaleString()}</Text></View>} />
       <View accessibilityRole="tablist" style={[styles.marketTabs, { backgroundColor: withAlpha(palette.surfaceContainer, 0.64) }]}><BlurView intensity={68} tint="light" experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined} style={StyleSheet.absoluteFill} />
         {(['accessories', 'impact'] as const).map((id) => {
           const selected = marketTab === id;
@@ -511,16 +530,16 @@ function MarketplacePage({ user, token, palette, onPurchase, onContribute, onRed
         {marketTab === 'accessories' ? (
           <>
             <View style={styles.marketHero}><LinearGradient colors={[palette.deep, palette.secondary]} style={StyleSheet.absoluteFill} /><View style={styles.marketOrb} /><Text style={styles.marketEyebrow}>FEATURED DROP</Text><Text style={styles.marketTitle}>Wear the change.</Text><Text style={styles.marketText}>Collect expressive pieces with the leaves you earn.</Text></View>
-            <View style={styles.catalogGrid}>{offers.map((offer) => {
+            {marketLoading ? <DataStatePanel palette={palette} loading title="Loading accessories" detail="Preparing the latest digital collection." /> : marketError ? <DataStatePanel palette={palette} title="Marketplace unavailable" detail={marketError} actionLabel="Try again" onAction={() => void loadMarket()} /> : <View style={styles.catalogGrid}>{offers.map((offer) => {
               const accessory = ACCESSORIES.find((item) => item.id === offer.id)!;
               const owned = user.accessories.includes(offer.id);
               const itemScheme = createAccessoryColorScheme([offer.id]);
               return <Pressable key={offer.id} onPress={() => { setSelection({ kind: 'accessory', offer }); setSuccess(false); }} accessibilityRole="button" accessibilityLabel={`${accessory.name}, ${offer.price} leaves${owned ? ', owned' : ''}`} accessibilityHint="Opens a preview and purchase details" style={({ pressed }) => [styles.catalogCard, { minHeight: 224, backgroundColor: palette.surfaceBright, borderColor: palette.outlineVariant }, pressed && styles.cardPressed]}><View style={[styles.catalogPreview, { backgroundColor: itemScheme.primaryContainer }]}>{offer.imageDataUrl ? <Image source={{ uri: offer.imageDataUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : <AccessoryPreview3D id={offer.id} />}<View style={[styles.catalogRarity, { backgroundColor: rarityColors[accessory.rarity].background }]}><Text style={[styles.rarityText, { color: rarityColors[accessory.rarity].text }]}>{accessory.rarity}</Text></View></View><View style={styles.catalogInfo}><View style={styles.catalogCopy}><Text style={[styles.catalogName, { color: palette.onSurface }]} numberOfLines={2}>{accessory.name}</Text><Text style={[styles.catalogCategory, { color: palette.onSurfaceVariant }]}>{categoryLabel(accessory.category)}</Text></View><View style={[styles.catalogPrice, { backgroundColor: owned ? palette.successContainer : palette.deep }]}><Ionicons name={owned ? 'checkmark' : 'leaf'} size={14} color={owned ? palette.success : '#FFFFFF'} /><Text style={[styles.catalogBuyText, { color: owned ? palette.success : '#FFFFFF' }]}>{owned ? 'Owned' : `${offer.price} leaves`}</Text></View></View></Pressable>;
-            })}</View>
-            {!offers.length && <Text style={[styles.emptyState, { color: palette.onSurfaceVariant }]}>No accessories are available right now.</Text>}
+            })}</View>}
+            {!marketLoading && !marketError && !offers.length && <DataStatePanel palette={palette} title="No accessories yet" detail="New digital pieces will appear here when they are available." />}
           </>
         ) : (
-          <View style={styles.catalogGrid}>{purposes.map((purpose) => <Pressable key={purpose.id} accessibilityRole="button" accessibilityLabel={`${purpose.name}, ${purpose.points} leaves`} accessibilityHint="Opens redemption details" onPress={() => { setSelection({ kind: 'purpose', purpose }); setSuccess(false); }} style={({ pressed }) => [styles.catalogCard, { minHeight: 224, backgroundColor: palette.surfaceBright, borderColor: palette.outlineVariant }, pressed && styles.cardPressed]}><View style={[styles.catalogPreview, { backgroundColor: palette.tertiaryContainer }]}>{purpose.imageDataUrl ? <Image source={{ uri: purpose.imageDataUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : <Ionicons name={purpose.icon} size={42} color={palette.onTertiaryContainer} />}<View style={[styles.catalogRarity, { backgroundColor: withAlpha(palette.surfaceBright, 0.88) }]}><Text style={[styles.rarityText, { color: palette.deep }]}>{purpose.type}</Text></View></View><View style={styles.catalogInfo}><View style={styles.catalogCopy}><Text style={[styles.catalogName, { color: palette.onSurface }]} numberOfLines={2}>{purpose.name}</Text><Text style={[styles.catalogCategory, { color: palette.onSurfaceVariant }]} numberOfLines={2}>{purpose.detail}</Text></View><View style={[styles.catalogPrice, { backgroundColor: palette.deep }]}><Ionicons name="leaf" size={14} color="#FFFFFF" /><Text style={styles.catalogBuyText}>{purpose.points} leaves</Text></View></View></Pressable>)}</View>
+          marketLoading ? <DataStatePanel palette={palette} loading title="Loading rewards" detail="Finding current rewards and impact partners." /> : marketError ? <DataStatePanel palette={palette} title="Marketplace unavailable" detail={marketError} actionLabel="Try again" onAction={() => void loadMarket()} /> : purposes.length ? <View style={styles.catalogGrid}>{purposes.map((purpose) => <Pressable key={purpose.id} accessibilityRole="button" accessibilityLabel={`${purpose.name}, ${purpose.points} leaves`} accessibilityHint="Opens redemption details" onPress={() => { setSelection({ kind: 'purpose', purpose }); setSuccess(false); }} style={({ pressed }) => [styles.catalogCard, { minHeight: 224, backgroundColor: palette.surfaceBright, borderColor: palette.outlineVariant }, pressed && styles.cardPressed]}><View style={[styles.catalogPreview, { backgroundColor: palette.tertiaryContainer }]}>{purpose.imageDataUrl ? <Image source={{ uri: purpose.imageDataUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" /> : <Ionicons name={purpose.icon} size={42} color={palette.onTertiaryContainer} />}<View style={[styles.catalogRarity, { backgroundColor: withAlpha(palette.surfaceBright, 0.88) }]}><Text style={[styles.rarityText, { color: palette.deep }]}>{purpose.type}</Text></View></View><View style={styles.catalogInfo}><View style={styles.catalogCopy}><Text style={[styles.catalogName, { color: palette.onSurface }]} numberOfLines={2}>{purpose.name}</Text><Text style={[styles.catalogCategory, { color: palette.onSurfaceVariant }]} numberOfLines={2}>{purpose.detail}</Text></View><View style={[styles.catalogPrice, { backgroundColor: palette.deep }]}><Ionicons name="leaf" size={14} color="#FFFFFF" /><Text style={styles.catalogBuyText}>{purpose.points.toLocaleString()} leaves</Text></View></View></Pressable>)}</View> : <DataStatePanel palette={palette} title="No rewards yet" detail="Coupons and verified community causes will appear here." />
         )}
       </ScrollView>
 
@@ -564,10 +583,10 @@ function ConfirmSlider({ label, color, disabled, onConfirm }: { label: string; c
     onPanResponderRelease: (_event, gesture) => {
       const maximum = maxDistance();
       if (maximum > 0 && gesture.dx >= maximum * 0.78) {
-        Animated.timing(translateX, { toValue: maximum, duration: 130, useNativeDriver: true }).start(() => void onConfirm());
-      } else Animated.spring(translateX, { toValue: 0, useNativeDriver: true, speed: 22, bounciness: 7 }).start();
+        Animated.timing(translateX, { toValue: maximum, duration: 130, useNativeDriver: useNativeAnimationDriver }).start(() => void onConfirm());
+      } else Animated.spring(translateX, { toValue: 0, useNativeDriver: useNativeAnimationDriver, speed: 22, bounciness: 7 }).start();
     },
-    onPanResponderTerminate: () => Animated.spring(translateX, { toValue: 0, useNativeDriver: true }).start(),
+    onPanResponderTerminate: () => Animated.spring(translateX, { toValue: 0, useNativeDriver: useNativeAnimationDriver }).start(),
   }), [disabled, onConfirm, translateX]);
 
   useEffect(() => { translateX.setValue(0); }, [disabled, translateX]);
@@ -577,14 +596,14 @@ function ConfirmSlider({ label, color, disabled, onConfirm }: { label: string; c
 function ConfettiBurst({ colors: confettiColors }: { colors: string[] }) {
   const progress = useRef(new Animated.Value(0)).current;
   const pieces = useMemo(() => Array.from({ length: 24 }, (_, index) => ({ left: `${(index * 37) % 96}%` as DimensionValue, delay: (index % 6) * 45, color: confettiColors[index % confettiColors.length], rotate: `${(index * 53) % 180}deg` })), [confettiColors]);
-  useEffect(() => { Animated.timing(progress, { toValue: 1, duration: 1100, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(); }, [progress]);
+  useEffect(() => { Animated.timing(progress, { toValue: 1, duration: 1100, easing: Easing.out(Easing.cubic), useNativeDriver: useNativeAnimationDriver }).start(); }, [progress]);
   return <View style={[styles.confettiLayer, { pointerEvents: 'none' }]}>{pieces.map((piece, index) => <Animated.View key={index} style={[styles.confettiPiece, { left: piece.left, top: -12, backgroundColor: piece.color, opacity: progress.interpolate({ inputRange: [0, 0.15, 0.88, 1], outputRange: [0, 1, 1, 0] }), transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [0, 330 + piece.delay] }) }, { rotate: piece.rotate }] }]} />)}</View>;
 }
 
 function FadeScrim() {
   const opacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(opacity, { toValue: 1, duration: 240, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+    Animated.timing(opacity, { toValue: 1, duration: 240, easing: Easing.out(Easing.quad), useNativeDriver: useNativeAnimationDriver }).start();
   }, [opacity]);
   return <Animated.View style={[StyleSheet.absoluteFill, styles.modalScrim, { backgroundColor: 'rgba(0,0,0,0.3)', opacity, pointerEvents: 'none' }]} />;
 }
@@ -592,7 +611,7 @@ function FadeScrim() {
 function RollingSheet({ children, style }: { children: ReactNode; style: object }) {
   const translateY = useRef(new Animated.Value(560)).current;
   useEffect(() => {
-    Animated.spring(translateY, { toValue: 0, damping: 24, stiffness: 230, mass: 0.9, useNativeDriver: true }).start();
+    Animated.spring(translateY, { toValue: 0, damping: 24, stiffness: 230, mass: 0.9, useNativeDriver: useNativeAnimationDriver }).start();
   }, [translateY]);
   return <Animated.View style={[style, { backgroundColor: 'rgba(250,252,248,0.68)', transform: [{ translateY }] }]}><BlurView intensity={78} tint="light" experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined} style={StyleSheet.absoluteFill} />{children}</Animated.View>;
 }
@@ -873,9 +892,17 @@ function EventCard({ event, onPress }: { event: NovoEvent; onPress: () => void }
 function FriendsPage({ user, token, palette }: { user: User; token: string; palette: Palette }) {
   const inviteUrl = createFriendInviteUrl(user.id);
   const [friends, setFriends] = useState<Friend[]>([]);
-  const [questFriends, setQuestFriends] = useState<string[]>([]);
   const [qrExpanded, setQrExpanded] = useState(false);
-  useEffect(() => { getFriends(token).then(setFriends).catch(() => setFriends([])); }, [token]);
+  const [friendsLoading, setFriendsLoading] = useState(true);
+  const [friendsError, setFriendsError] = useState('');
+  const loadFriends = useCallback(async () => {
+    setFriendsLoading(true);
+    setFriendsError('');
+    try { setFriends(await getFriends(token)); }
+    catch (reason) { setFriendsError(reason instanceof Error ? reason.message : 'Your friends could not be loaded.'); }
+    finally { setFriendsLoading(false); }
+  }, [token]);
+  useEffect(() => { void loadFriends(); }, [loadFriends]);
   const shareInvite = () => Share.share({
     title: 'Join my novo circle',
     message: `Join my novo circle:\n${inviteUrl}`,
@@ -885,25 +912,29 @@ function FriendsPage({ user, token, palette }: { user: User; token: string; pale
     <View style={styles.pagePad}>
       <PageTitle eyebrow="YOUR CIRCLE" title="Friends" right={<Pressable onPress={shareInvite} accessibilityRole="button" accessibilityLabel="Share friend invite" style={[styles.roundButton, { backgroundColor: palette.primary }]}><Ionicons name="person-add" size={20} color={palette.onPrimary} /></Pressable>} />
       <GlassPanel style={styles.inviteCard}><Pressable onPress={() => setQrExpanded(true)} accessibilityRole="button" accessibilityLabel="Expand friend invite QR code" style={styles.qrCode}><QRCode value={inviteUrl} size={82} color={palette.deep} backgroundColor="#FFFFFF" quietZone={5} /></Pressable><View style={{ flex: 1 }}><Text style={[styles.inviteTitle, { color: palette.onSurface }]}>Grow your circle</Text><Text style={[styles.inviteText, { color: palette.onSurfaceVariant }]}>Friends can scan this QR or open the app-first invite URL. Tap the QR to enlarge it.</Text><Pressable onPress={shareInvite} accessibilityRole="button" accessibilityLabel="Share invite link" style={[styles.copyLink, { alignSelf: 'flex-start', minHeight: 40, paddingRight: 10, marginTop: 4 }]}><Ionicons name="link" size={15} color={palette.deep} /><Text style={[styles.copyLinkText, { color: palette.deep }]}>Share invite link</Text></Pressable></View></GlassPanel>
-      <View style={styles.sectionRow}><Text style={[styles.sectionTitle, { color: palette.onSurface }]}>Your friends</Text><Text style={[styles.sectionLink, { color: palette.deep }]}>{friends.length} friends</Text></View>
+      <View style={styles.sectionRow}><Text style={[styles.sectionTitle, { color: palette.onSurface }]}>Your friends</Text><Text style={[styles.sectionLink, { color: palette.deep }]}>{friendsLoading ? 'Loading…' : `${friends.length} ${friends.length === 1 ? 'friend' : 'friends'}`}</Text></View>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.friendList}>
-        {friends.length ? friends.map((friend) => <FriendRow key={friend.id} name={friend.name} mascot={friend.mascotName} accessories={friend.accessories} lifetimePoints={friend.lifetimePoints} palette={palette} added={questFriends.includes(friend.id)} onQuest={() => setQuestFriends((current) => current.includes(friend.id) ? current.filter((id) => id !== friend.id) : [...current, friend.id])} onMore={() => Alert.alert(friend.name, `${friend.name} and ${friend.mascotName} have earned ${friend.lifetimePoints.toLocaleString()} lifetime leaves.`)} />) : <View style={[styles.friendEmpty, { backgroundColor: withAlpha(palette.surfaceBright, 0.7), borderColor: palette.outlineVariant }]}><View style={[styles.friendEmptyIcon, { backgroundColor: palette.primaryContainer }]}><Ionicons name="people-outline" size={24} color={palette.onPrimaryContainer} /></View><View style={styles.friendEmptyCopy}><Text style={[styles.friendEmptyTitle, { color: palette.onSurface }]}>Your circle starts here</Text><Text style={[styles.friendEmptyText, { color: palette.onSurfaceVariant }]}>Share the QR above to add your first friend.</Text></View></View>}
+        {friendsLoading ? <DataStatePanel palette={palette} loading title="Loading your circle" detail="Bringing your friends and their mascots together." /> : friendsError ? <DataStatePanel palette={palette} title="Friends unavailable" detail={friendsError} actionLabel="Try again" onAction={() => void loadFriends()} /> : friends.length ? friends.map((friend) => <FriendRow key={friend.id} name={friend.name} mascot={friend.mascotName} accessories={friend.accessories} lifetimePoints={friend.lifetimePoints} palette={palette} onMore={() => Alert.alert(friend.name, `${friend.name} and ${friend.mascotName} have earned ${friend.lifetimePoints.toLocaleString()} lifetime leaves.`)} />) : <View style={[styles.friendEmpty, { backgroundColor: withAlpha(palette.surfaceBright, 0.7), borderColor: palette.outlineVariant }]}><View style={[styles.friendEmptyIcon, { backgroundColor: palette.primaryContainer }]}><Ionicons name="people-outline" size={24} color={palette.onPrimaryContainer} /></View><View style={styles.friendEmptyCopy}><Text style={[styles.friendEmptyTitle, { color: palette.onSurface }]}>Your circle starts here</Text><Text style={[styles.friendEmptyText, { color: palette.onSurfaceVariant }]}>Share the QR above to add your first friend.</Text></View></View>}
       </ScrollView><Modal visible={qrExpanded} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setQrExpanded(false)}><Pressable style={styles.qrModal} onPress={() => setQrExpanded(false)} accessibilityRole="button" accessibilityLabel="Close expanded QR code"><View style={styles.qrModalCard}><QRCode value={inviteUrl} size={260} color={palette.deep} backgroundColor="#FFFFFF" quietZone={12} /><Text style={[styles.qrModalTitle, { color: palette.onSurface }]}>Scan to open novo</Text><Text style={[styles.qrModalText, { color: palette.onSurfaceVariant }]}>The invite opens the novo app when installed, with the website as fallback.</Text></View></Pressable></Modal>
     </View>
   );
 }
 
-function FriendRow({ name, mascot, accessories, lifetimePoints, palette, added, onQuest, onMore }: { name: string; mascot: string; accessories: AccessoryId[]; lifetimePoints: number; palette: Palette; added: boolean; onQuest: () => void; onMore: () => void }) {
+function FriendRow({ name, mascot, accessories, lifetimePoints, palette, onMore }: { name: string; mascot: string; accessories: AccessoryId[]; lifetimePoints: number; palette: Palette; onMore: () => void }) {
   const level = getLifetimeLevel(lifetimePoints);
   const friendScheme = createAccessoryColorScheme(accessories);
-  return <View style={[styles.friendRow, { minHeight: 96, backgroundColor: withAlpha(palette.surfaceBright, 0.76), borderColor: palette.outlineVariant }]}><View style={styles.friendInfo}><View style={[styles.friendAvatar, { backgroundColor: friendScheme.primaryContainer }]}><Text style={[styles.friendInitial, { color: friendScheme.onPrimaryContainer }]}>{name[0]}</Text></View><View style={styles.friendCopy}><Text style={[styles.friendName, { color: palette.onSurface }]}>{name}</Text><View style={styles.friendPlushieLine}><Text style={[styles.friendPlushieName, { color: palette.onSurfaceVariant }]}>{mascot}</Text><View style={styles.friendAccessories}>{accessories.map((id) => { const badgeScheme = createAccessoryColorScheme([id]); return <View key={id} accessibilityLabel={ACCESSORIES.find((item) => item.id === id)?.name} style={[styles.friendBadge, { backgroundColor: badgeScheme.primaryContainer }]}><Ionicons name={accessoryIcon(id)} size={12} color={badgeScheme.onPrimaryContainer} /></View>; })}</View></View><Text style={[styles.friendProgress, { color: palette.onSurfaceVariant }]}>{lifetimePoints.toLocaleString()} lifetime leaves · Level {level.level}</Text></View></View><View style={styles.friendActions}><Pressable onPress={onQuest} accessibilityRole="button" accessibilityLabel={added ? `Remove ${name} from quest` : `Add ${name} to quest`} accessibilityState={{ selected: added }} style={[styles.questButton, { width: 44, height: 44, borderRadius: 14, backgroundColor: added ? palette.primary : palette.deep }]}><Ionicons name={added ? 'checkmark' : 'flash-outline'} size={17} color={added ? palette.onPrimary : '#FFFFFF'} /></Pressable><Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel={`More actions for ${name}`} style={[styles.moreButton, { width: 44, height: 44, borderRadius: 14, backgroundColor: palette.surfaceContainerHigh }]}><Ionicons name="ellipsis-horizontal" size={18} color={palette.onSurface} /></Pressable></View></View>;
+  const visibleAccessories = accessories.slice(0, 3);
+  const remainingAccessories = Math.max(0, accessories.length - visibleAccessories.length);
+  return <View style={[styles.friendRow, { minHeight: 96, backgroundColor: withAlpha(palette.surfaceBright, 0.76), borderColor: palette.outlineVariant }]}><View style={styles.friendInfo}><View style={[styles.friendAvatar, { backgroundColor: friendScheme.primaryContainer }]}><Text style={[styles.friendInitial, { color: friendScheme.onPrimaryContainer }]}>{name[0]?.toUpperCase() || '?'}</Text></View><View style={styles.friendCopy}><Text numberOfLines={1} style={[styles.friendName, { color: palette.onSurface }]}>{name}</Text><View style={styles.friendPlushieLine}><Text numberOfLines={1} style={[styles.friendPlushieName, { color: palette.onSurfaceVariant }]}>{mascot}</Text><View style={styles.friendAccessories}>{visibleAccessories.map((id) => { const badgeScheme = createAccessoryColorScheme([id]); return <View key={id} accessibilityLabel={ACCESSORIES.find((item) => item.id === id)?.name} style={[styles.friendBadge, { backgroundColor: badgeScheme.primaryContainer }]}><Ionicons name={accessoryIcon(id)} size={12} color={badgeScheme.onPrimaryContainer} /></View>; })}{remainingAccessories ? <View accessibilityLabel={`${remainingAccessories} more accessories`} style={[styles.friendBadge, { backgroundColor: palette.surfaceContainerHigh }]}><Text style={[styles.friendBadgeMore, { color: palette.onSurfaceVariant }]}>+{remainingAccessories}</Text></View> : null}</View></View><Text numberOfLines={1} style={[styles.friendProgress, { color: palette.onSurfaceVariant }]}>{lifetimePoints.toLocaleString()} lifetime leaves · Level {level.level}</Text></View></View><Pressable onPress={onMore} accessibilityRole="button" accessibilityLabel={`View ${name}'s details`} style={[styles.moreButton, { width: 44, height: 44, borderRadius: 14, backgroundColor: palette.surfaceContainerHigh }]}><Ionicons name="chevron-forward" size={18} color={palette.onSurface} /></Pressable></View>;
 }
 
 function SettingsPage({ user, palette, onUpdateProfile, onChangePassword, onLinkAccount, onUpdateNotifications, onSignOut, onUnpair, onDeleteAccount }: { user: User; palette: Palette; onUpdateProfile: (input: { name: string; username: string; avatarDataUrl?: string | null }) => Promise<User>; onChangePassword: (input: { currentPassword: string; newPassword: string }) => Promise<void>; onLinkAccount: (provider: OAuthProvider) => Promise<User>; onUpdateNotifications: (preferences: User['notificationPreferences']) => Promise<void>; onSignOut: () => void; onUnpair: () => void; onDeleteAccount: () => void }) {
+  const { width } = useWindowDimensions();
   const [showCredits, setShowCredits] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const confirmUnpair = () => Alert.alert('Unpair wristband?', `${user.mascotName} stays in-app, but the wristband must be paired again before Home can open.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Unpair', style: 'destructive', onPress: onUnpair }]);
+  const confirmSignOut = () => Alert.alert('Sign out of novo?', 'Your progress is saved to your account and will be here when you return.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Sign out', onPress: onSignOut }]);
   const confirmDelete = () => Alert.alert('Delete account?', 'This permanently removes your novo account, points, mascot and digital accessory collection from every device.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete account', style: 'destructive', onPress: onDeleteAccount }]);
   if (showCredits) return <CreditsPage onBack={() => setShowCredits(false)} />;
   if (showNotifications) return <NotificationSettingsPage preferences={user.notificationPreferences} palette={palette} onBack={() => setShowNotifications(false)} onSave={onUpdateNotifications} />;
@@ -912,9 +943,9 @@ function SettingsPage({ user, palette, onUpdateProfile, onChangePassword, onLink
     <View style={styles.pagePad}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.settingsPageContent}>
         <PageTitle eyebrow="MAKE IT YOURS" title="Settings" />
-        <GlassPanel style={styles.profileCard}>{user.avatarDataUrl ? <Image source={{ uri: user.avatarDataUrl }} style={styles.profileAvatarImage} /> : <View style={[styles.profileAvatar, { backgroundColor: palette.primary }]}><Text style={[styles.profileInitial, { color: palette.onPrimary }]}>{user.name[0]}</Text></View>}<View style={{ flex: 1 }}><Text style={[styles.profileName, { color: palette.onSurface }]}>{user.name}</Text><Text style={[styles.profileEmail, { color: palette.onSurfaceVariant }]} numberOfLines={1}>@{user.username} · {user.email}</Text></View><Pressable onPress={() => setShowProfile(true)} accessibilityRole="button" accessibilityLabel="Edit profile" style={[styles.editButton, { backgroundColor: palette.secondaryContainer }]}><Text style={[styles.editText, { color: palette.onSecondaryContainer }]}>Edit</Text></Pressable></GlassPanel>
+        <GlassPanel style={styles.profileCard}>{user.avatarDataUrl ? <Image source={{ uri: user.avatarDataUrl }} style={styles.profileAvatarImage} /> : <View style={[styles.profileAvatar, { backgroundColor: palette.primary }]}><Text style={[styles.profileInitial, { color: palette.onPrimary }]}>{user.name[0]?.toUpperCase() || '?'}</Text></View>}<View style={{ flex: 1, minWidth: 0 }}><Text style={[styles.profileName, { color: palette.onSurface }]} numberOfLines={1}>{user.name}</Text><Text style={[styles.profileEmail, { color: palette.onSurfaceVariant }]} numberOfLines={1}>@{user.username} · {user.email}</Text></View><Pressable onPress={() => setShowProfile(true)} accessibilityRole="button" accessibilityLabel="Edit profile" style={[styles.editButton, { backgroundColor: palette.secondaryContainer }]}><Text style={[styles.editText, { color: palette.onSecondaryContainer }]}>Edit</Text></Pressable></GlassPanel>
         <View style={styles.settingsList}><Setting icon="person-circle-outline" label="Profile, password & linked accounts" onPress={() => setShowProfile(true)} /><Setting icon="notifications-outline" label="Notifications" onPress={() => setShowNotifications(true)} /><Setting icon="information-circle-outline" label="Credits" onPress={() => setShowCredits(true)} /><Setting icon="radio-outline" label="Unpair wristband" onPress={confirmUnpair} /></View>
-        <View style={styles.accountActions}><Pressable onPress={onSignOut} accessibilityRole="button" accessibilityLabel="Sign out" style={({ pressed }) => [styles.signOutButton, { backgroundColor: palette.surfaceContainerLow }, pressed && styles.cardPressed]}><Ionicons name="log-out-outline" size={19} color={palette.onSurface} /><Text style={[styles.signOutText, { color: palette.onSurface }]}>Sign out</Text></Pressable><Pressable onPress={confirmDelete} accessibilityRole="button" accessibilityLabel="Delete account" accessibilityHint="Requires confirmation" style={({ pressed }) => [styles.deleteButton, { backgroundColor: palette.errorContainer }, pressed && styles.cardPressed]}><Ionicons name="trash-outline" size={19} color={palette.error} /><Text style={[styles.deleteText, { color: palette.error }]}>Delete account</Text></Pressable></View>
+        <View style={[styles.accountActions, width < 370 && styles.accountActionsCompact]}><Pressable onPress={confirmSignOut} accessibilityRole="button" accessibilityLabel="Sign out" accessibilityHint="Requires confirmation" style={({ pressed }) => [styles.signOutButton, { backgroundColor: palette.surfaceContainerLow }, pressed && styles.cardPressed]}><Ionicons name="log-out-outline" size={19} color={palette.onSurface} /><Text style={[styles.signOutText, { color: palette.onSurface }]}>Sign out</Text></Pressable><Pressable onPress={confirmDelete} accessibilityRole="button" accessibilityLabel="Delete account" accessibilityHint="Requires confirmation" style={({ pressed }) => [styles.deleteButton, { backgroundColor: palette.errorContainer }, pressed && styles.cardPressed]}><Ionicons name="trash-outline" size={19} color={palette.error} /><Text style={[styles.deleteText, { color: palette.error }]}>Delete account</Text></Pressable></View>
       </ScrollView>
     </View>
   );
@@ -928,7 +959,7 @@ function NotificationSettingsPage({ preferences, palette, onBack, onSave }: { pr
     { key: 'tasks', title: 'Task reminders', detail: 'A gentle reminder before today’s tasks expire.', icon: 'checkmark-circle-outline' },
     { key: 'events', title: 'Events nearby', detail: 'Upcoming activities and registration reminders.', icon: 'calendar-outline' },
     { key: 'friends', title: 'Friend activity', detail: 'Invites and shared quest updates.', icon: 'people-outline' },
-    { key: 'orders', title: 'Orders and pickup', detail: 'Locker updates and accessory pairing reminders.', icon: 'bag-check-outline' },
+    { key: 'orders', title: 'Rewards and wristband', detail: 'Coupon updates and wristband collection reminders.', icon: 'bag-check-outline' },
   ];
   const toggle = async (key: keyof User['notificationPreferences']) => {
     if (busy) return;
@@ -938,17 +969,17 @@ function NotificationSettingsPage({ preferences, palette, onBack, onSave }: { pr
     catch (reason) { setValue(value); Alert.alert('Notifications not updated', reason instanceof Error ? reason.message : 'Please try again.'); }
     finally { setBusy(null); }
   };
-  return <View style={styles.pagePad}><View style={styles.creditsHeader}><Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back to settings" style={[styles.creditsBack, { backgroundColor: palette.surfaceContainerLow, borderColor: palette.outlineVariant }]}><Ionicons name="arrow-back" size={21} color={palette.onSurface} /></Pressable><View style={{ flex: 1 }}><Text style={[styles.pageEyebrow, { color: palette.deep }]}>REMINDERS</Text><Text style={[styles.pageTitle, { color: palette.onSurface }]}>Notifications</Text></View></View><Text style={[styles.creditsIntro, { color: palette.onSurfaceVariant }]}>Choose the moments when novo may gently bring you back to your wristband, mascot and community.</Text><ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.creditsList}>{options.map((option) => { const enabled = value[option.key]; return <Pressable key={option.key} disabled={Boolean(busy)} onPress={() => void toggle(option.key)} accessibilityRole="switch" accessibilityState={{ checked: enabled, disabled: Boolean(busy) }} style={[styles.notificationRow, { backgroundColor: withAlpha(palette.surfaceBright, 0.74), borderColor: palette.outlineVariant }]}><View style={[styles.creditMark, { backgroundColor: enabled ? palette.primaryContainer : palette.surfaceContainerHigh }]}><Ionicons name={option.icon} size={20} color={enabled ? palette.onPrimaryContainer : palette.onSurfaceVariant} /></View><View style={styles.creditCopy}><Text style={[styles.creditName, { color: palette.onSurface }]}>{option.title}</Text><Text style={[styles.creditDetail, { color: palette.onSurfaceVariant }]}>{option.detail}</Text></View><View style={[styles.toggleTrack, { backgroundColor: enabled ? palette.deep : palette.surfaceContainerHigh }]}><View style={[styles.toggleKnob, enabled && styles.toggleKnobOn]} /></View></Pressable>; })}<Text style={[styles.creditsFootnote, { color: palette.onSurfaceVariant }]}>Your device permission and these preferences must both be enabled. Event, friend and reward updates are prepared for server push delivery.</Text></ScrollView></View>;
+  return <View style={styles.pagePad}><View style={styles.creditsHeader}><Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back to settings" style={[styles.creditsBack, { backgroundColor: palette.surfaceContainerLow, borderColor: palette.outlineVariant }]}><Ionicons name="arrow-back" size={21} color={palette.onSurface} /></Pressable><View style={{ flex: 1 }}><Text style={[styles.pageEyebrow, { color: palette.deep }]}>REMINDERS</Text><Text style={[styles.pageTitle, { color: palette.onSurface }]}>Notifications</Text></View></View><Text style={[styles.creditsIntro, { color: palette.onSurfaceVariant }]}>Choose the moments when novo may gently bring you back to your wristband, mascot and community.</Text><ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.creditsList}>{options.map((option) => { const enabled = value[option.key]; return <Pressable key={option.key} disabled={Boolean(busy)} onPress={() => void toggle(option.key)} accessibilityRole="switch" accessibilityState={{ checked: enabled, disabled: Boolean(busy) }} style={[styles.notificationRow, { backgroundColor: withAlpha(palette.surfaceBright, 0.74), borderColor: palette.outlineVariant }, busy && styles.controlBusy]}><View style={[styles.creditMark, { backgroundColor: enabled ? palette.primaryContainer : palette.surfaceContainerHigh }]}><Ionicons name={option.icon} size={20} color={enabled ? palette.onPrimaryContainer : palette.onSurfaceVariant} /></View><View style={styles.creditCopy}><Text style={[styles.creditName, { color: palette.onSurface }]}>{option.title}</Text><Text style={[styles.creditDetail, { color: palette.onSurfaceVariant }]}>{option.detail}</Text></View><View style={[styles.toggleTrack, { backgroundColor: enabled ? palette.deep : palette.surfaceContainerHigh }]}><View style={[styles.toggleKnob, enabled && styles.toggleKnobOn]} /></View></Pressable>; })}<Text style={[styles.creditsFootnote, { color: palette.onSurfaceVariant }]}>Your device permission and these preferences must both be enabled for reminders to appear.</Text></ScrollView></View>;
 }
 
 function CreditsPage({ onBack }: { onBack: () => void }) {
   const scheme = useDynamicScheme();
   return <View style={styles.pagePad}>
     <View style={styles.creditsHeader}><Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back to settings" style={[styles.creditsBack, { backgroundColor: scheme.surfaceContainerLow, borderColor: scheme.outlineVariant }]}><Ionicons name="arrow-back" size={21} color={scheme.onSurface} /></Pressable><View style={{ flex: 1 }}><Text style={[styles.pageEyebrow, { color: scheme.deep }]}>OPEN SOURCE</Text><Text style={[styles.pageTitle, { color: scheme.onSurface }]}>Credits</Text></View></View>
-    <Text style={styles.creditsIntro}>novo is built with open-source software and open map data. Thank you to the people and communities who make these projects possible.</Text>
+    <Text style={[styles.creditsIntro, { color: scheme.onSurfaceVariant }]}>novo is built with open-source software and open map data. Thank you to the people and communities who make these projects possible.</Text>
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.creditsList}>
       {OPEN_SOURCE_CREDITS.map((credit) => <Pressable key={credit.name} onPress={() => void Linking.openURL(credit.url)} accessibilityRole="link" style={[styles.creditRow, { backgroundColor: withAlpha(scheme.surfaceBright, 0.74), borderColor: scheme.outlineVariant }]}><View style={[styles.creditMark, { backgroundColor: scheme.primaryContainer }]}><Ionicons name={credit.name === 'OpenStreetMap' ? 'map-outline' : 'code-slash-outline'} size={19} color={scheme.onPrimaryContainer} /></View><View style={styles.creditCopy}><Text style={[styles.creditName, { color: scheme.onSurface }]}>{credit.name}</Text><Text style={[styles.creditDetail, { color: scheme.onSurfaceVariant }]}>{credit.detail}</Text><Text style={[styles.creditLicense, { color: scheme.deep }]}>{credit.license}</Text></View><Ionicons name="open-outline" size={17} color={scheme.onSurfaceVariant} /></Pressable>)}
-      <Text style={styles.creditsFootnote}>Individual copyright notices, map attribution and licence texts are available here from each project.</Text>
+      <Text style={[styles.creditsFootnote, { color: scheme.onSurfaceVariant }]}>Individual copyright notices, map attribution and licence texts are available here from each project.</Text>
     </ScrollView>
   </View>;
 }
@@ -1026,5 +1057,15 @@ const styles = StyleSheet.create({
   qrModalCard: { width: '100%', maxWidth: 340, borderRadius: 28, backgroundColor: '#FFFFFF', padding: 22, alignItems: 'center', gap: 9 },
   qrModalTitle: { fontSize: 20, fontWeight: '900', marginTop: 4 },
   qrModalText: { fontSize: 12, lineHeight: 17, textAlign: 'center' },
+  dataState: { minHeight: 88, borderRadius: 22, borderWidth: 1, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  dataStateIcon: { width: 44, height: 44, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  dataStateCopy: { flex: 1, minWidth: 0 },
+  dataStateTitle: { fontSize: 14, lineHeight: 18, fontWeight: '900' },
+  dataStateDetail: { marginTop: 2, fontSize: 11, lineHeight: 16 },
+  dataStateAction: { minHeight: 42, borderRadius: 14, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  dataStateActionText: { color: '#FFFFFF', fontSize: 12, fontWeight: '900' },
+  friendBadgeMore: { fontSize: 9, fontWeight: '900' },
+  accountActionsCompact: { flexDirection: 'column' },
+  controlBusy: { opacity: 0.6 },
   navWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 86, paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, zIndex: 20 }, navShadow: { flex: 1, borderRadius: 26, shadowColor: colors.shadow, shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: 7 }, elevation: 10, backgroundColor: 'transparent' }, navClip: { flex: 1, borderRadius: 26, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.88)', backgroundColor: 'rgba(233,239,231,0.78)' }, navRow: { flex: 1, flexDirection: 'row', alignItems: 'center', padding: 3, gap: 2 }, navItem: { flex: 1, minHeight: 62, borderRadius: 19, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', gap: 3, backgroundColor: 'transparent' }, navIconWrap: { width: 44, height: 31, borderRadius: 14, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }, navText: { color: colors.inkMuted, backgroundColor: 'transparent', fontSize: 10, fontWeight: '600' }, navTextActive: { color: colors.ink, backgroundColor: 'transparent', fontWeight: '800' },
 });

@@ -60,7 +60,7 @@ describe('persistent authentication sessions', () => {
   it('restores member and administrator sessions after a server restart and persists revocation', { timeout: 20_000 }, async () => {
     const memberSignUp = await jsonRequest('/api/auth/onboarding', {
       method: 'POST',
-      body: JSON.stringify({ name: 'Persistent Member', email: 'persistent-member@example.com', mascotName: 'Sprout', focus: 'repair' }),
+      body: JSON.stringify({ name: 'Persistent Member', email: 'persistent-member@example.com', password: 'Password1!', mascotName: 'Sprout', focus: 'repair' }),
     });
     assert.equal(memberSignUp.status, 201);
     const memberToken = String((await memberSignUp.json() as { token: string }).token);

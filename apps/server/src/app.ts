@@ -116,6 +116,7 @@ type MobileHandoff = { token: string; userId: string; expiresAt: number; consume
 type Credential = { email: string; salt: string; passwordHash: string };
 type PasswordReset = { token: string; email: string; expiresAt: number; used: boolean };
 type OAuthAttempt = { provider: OAuthProvider; platform: 'web' | 'mobile'; expiresAt: number; linkUserId?: string };
+type OAuthOnboarding = { provider: OAuthProvider; subject: string; email: string; name: string; expiresAt: number };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -164,6 +165,7 @@ const locationCollections = {
 const databaseCollections = { ...persistedCollections, ...locationCollections };
 
 const oauthAttempts = new Map<string, OAuthAttempt>();
+const oauthOnboardingTokens = new Map<string, OAuthOnboarding>();
 
 function passwordMatches(email: string, password: string) {
   const credential = credentials.get(email.toLowerCase());
@@ -410,7 +412,10 @@ const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
   password: strongPasswordSchema.optional(),
-  focus: z.enum(['single-use', 'food', 'repair']),
+  oauthOnboardingToken: z.string().min(64).max(200).optional(),
+  focus: z.enum(['single-use', 'food', 'repair']).optional(),
+}).superRefine((input, context) => {
+  if (!input.password && !input.oauthOnboardingToken) context.addIssue({ code: z.ZodIssueCode.custom, path: ['password'], message: 'Create a password or continue with a verified sign-in provider.' });
 });
 const completeOnboardingSchema = z.object({ mascotName: z.string().trim().min(1).max(30) });
 
@@ -891,6 +896,13 @@ function createOAuthAttempt(provider: OAuthProvider, platform: OAuthAttempt['pla
   return oauthAuthorizationUrl(provider, state);
 }
 
+function createOAuthOnboarding(profile: { email: string; name: string; subject: string }, provider: OAuthProvider) {
+  const token = randomBytes(48).toString('hex');
+  oauthOnboardingTokens.set(token, { provider, subject: profile.subject, email: profile.email.toLowerCase(), name: profile.name, expiresAt: Date.now() + 15 * 60 * 1000 });
+  for (const [key, onboarding] of oauthOnboardingTokens) if (onboarding.expiresAt <= Date.now()) oauthOnboardingTokens.delete(key);
+  return token;
+}
+
 async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: { email: string; name: string; subject: string }) {
   const email = profile.email.toLowerCase();
   const linkedElsewhere = [...users.values()].find((candidate) => candidate.linkedAccounts.some((account) => account.provider === attempt.provider && account.subject === profile.subject));
@@ -919,7 +931,8 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
   const user = linkedElsewhere ?? users.get(email);
   if (!account || !user) {
     const destination = attempt.platform === 'mobile' ? 'novo://auth/oauth' : `${publicAppUrl()}/`;
-    response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}`);
+    const onboardingToken = attempt.platform === 'mobile' ? createOAuthOnboarding({ ...profile, email }, attempt.provider) : null;
+    response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}${onboardingToken ? `&onboardingToken=${encodeURIComponent(onboardingToken)}` : ''}`);
     return;
   }
   if (account.status === 'suspended') {
@@ -1349,7 +1362,16 @@ app.post('/api/auth/google', async (request, response, next) => {
 app.post('/api/auth/onboarding', async (request, response, next) => {
   try {
     const input = onboardingSchema.parse(request.body);
-    const user = createMember({ ...input, mascotName: '', onboardingCompleted: false });
+    const email = input.email.toLowerCase();
+    const oauthOnboarding = input.oauthOnboardingToken ? oauthOnboardingTokens.get(input.oauthOnboardingToken) : undefined;
+    if (input.oauthOnboardingToken && (!oauthOnboarding || oauthOnboarding.expiresAt <= Date.now())) return response.status(401).json({ message: 'This verified sign-in has expired. Return to sign in and try again.' });
+    if (oauthOnboarding && oauthOnboarding.email !== email) return response.status(400).json({ message: 'The verified account does not match this email address.' });
+    if (oauthOnboarding && [...users.values()].some((candidate) => candidate.linkedAccounts.some((linked) => linked.provider === oauthOnboarding.provider && linked.subject === oauthOnboarding.subject))) return response.status(409).json({ message: `This ${oauthCredentials(oauthOnboarding.provider).label} account is already linked to novo.` });
+    const user = createMember({ name: input.name, email, password: input.password, mascotName: '', onboardingCompleted: false });
+    if (oauthOnboarding) {
+      user.linkedAccounts.push({ provider: oauthOnboarding.provider, subject: oauthOnboarding.subject, email: oauthOnboarding.email });
+      oauthOnboardingTokens.delete(input.oauthOnboardingToken!);
+    }
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
     response.status(201).json({ isNewUser: false, token, user, accountStatus: 'active' });

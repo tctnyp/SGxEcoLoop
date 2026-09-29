@@ -34,6 +34,37 @@ describe('novo API', () => {
     assert.equal(response.body.user, undefined);
   });
 
+  it('creates and links a new member from a verified mobile OAuth handoff without asking for a password', async () => {
+    process.env.GOOGLE_WEB_CLIENT_ID = 'google-test-client';
+    process.env.GOOGLE_CLIENT_SECRET = 'google-test-secret';
+    const originalFetch = globalThis.fetch;
+    try {
+      const started = await request(app).get('/api/auth/google/start?platform=mobile');
+      assert.equal(started.status, 302);
+      const state = new URL(started.headers.location).searchParams.get('state');
+      assert.ok(state);
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.includes('oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'google-access-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('openidconnect.googleapis.com/v1/userinfo')) return new Response(JSON.stringify({ sub: 'new-google-subject', email: 'oauth-new@example.com', name: 'OAuth New', email_verified: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response('Not found', { status: 404 });
+      };
+      const callback = await request(app).get(`/api/auth/google/callback?state=${encodeURIComponent(state)}&code=test-code`);
+      assert.equal(callback.status, 302);
+      const onboardingToken = new URL(callback.headers.location).searchParams.get('onboardingToken');
+      assert.ok(onboardingToken);
+      const completed = await request(app).post('/api/auth/onboarding').send({ name: 'OAuth New', email: 'oauth-new@example.com', oauthOnboardingToken: onboardingToken });
+      assert.equal(completed.status, 201);
+      assert.deepEqual(completed.body.user.linkedAccounts, [{ provider: 'google', subject: 'new-google-subject', email: 'oauth-new@example.com' }]);
+      const reused = await request(app).post('/api/auth/onboarding').send({ name: 'Imposter', email: 'other@example.com', oauthOnboardingToken: onboardingToken });
+      assert.equal(reused.status, 401);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.GOOGLE_WEB_CLIENT_ID;
+      delete process.env.GOOGLE_CLIENT_SECRET;
+    }
+  });
+
   it('creates an empty real profile after onboarding', async () => {
     const { user, authorization } = await createMember('profile@example.com');
     const knownStatus = await request(app).post('/api/auth/email-status').send({ email: 'profile@example.com' });

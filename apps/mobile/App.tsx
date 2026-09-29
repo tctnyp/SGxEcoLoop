@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import * as WebBrowser from 'expo-web-browser';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -28,14 +29,14 @@ import {
   unpairWristband,
 } from './src/api';
 import { AppErrorBoundary } from './src/components/AppErrorBoundary';
+import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
+import { HomeScreen } from './src/screens/HomeScreen';
+import { OnboardingScreen } from './src/screens/OnboardingScreen';
+import { PairWristbandScreen } from './src/screens/PairWristbandScreen';
+import { SignInScreen } from './src/screens/SignInScreen';
+import { TutorialScreen } from './src/screens/TutorialScreen';
 import { AccessoryId, AccountStatus, AuthResult, OAuthProvider, Screen, User } from './src/types';
 import { colors } from './src/theme';
-
-const SignInScreen = lazy(() => import('./src/screens/SignInScreen').then((module) => ({ default: module.SignInScreen })));
-const OnboardingScreen = lazy(() => import('./src/screens/OnboardingScreen').then((module) => ({ default: module.OnboardingScreen })));
-const PairWristbandScreen = lazy(() => import('./src/screens/PairWristbandScreen').then((module) => ({ default: module.PairWristbandScreen })));
-const TutorialScreen = lazy(() => import('./src/screens/TutorialScreen').then((module) => ({ default: module.TutorialScreen })));
-const HomeScreen = lazy(() => import('./src/screens/HomeScreen').then((module) => ({ default: module.HomeScreen })));
 
 const SESSION_KEY = 'novo-mobile-session';
 const LAST_PROFILE_KEY = 'novo-last-profile';
@@ -45,12 +46,15 @@ function NovoApp() {
   const [fontsLoaded] = useFonts({ GoogleSansFlex: require('./assets/fonts/GoogleSansFlex-Regular.ttf') });
   const [screen, setScreen] = useState<Screen>('signin');
   const [user, setUser] = useState<User | null>(null);
-  const [draft, setDraft] = useState<{ name: string; email: string }>();
+  const [draft, setDraft] = useState<AuthResult['draft']>();
   const [booting, setBooting] = useState(true);
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('active');
   const [checkingAccess, setCheckingAccess] = useState(false);
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
+  const screenRef = useRef<Screen>('signin');
+
+  useEffect(() => { screenRef.current = screen; }, [screen]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return undefined;
@@ -91,9 +95,7 @@ function NovoApp() {
 
   const routeUser = async (nextUser: User) => {
     await saveUser(nextUser);
-    void import('./src/notifications')
-      .then(({ syncNotificationSchedule }) => syncNotificationSchedule(nextUser.notificationPreferences))
-      .catch(() => undefined);
+    void syncNotificationSchedule(nextUser.notificationPreferences).catch(() => undefined);
     if (!nextUser.wristbandPaired) setScreen('pair-wristband');
     else if (nextUser.onboardingCompleted === false) setScreen('tutorial');
     else setScreen('home');
@@ -229,7 +231,10 @@ function NovoApp() {
       try {
         const result = await restoreMobileSession(token);
         setAccountStatus(result.accountStatus ?? 'active');
-        if (result.user) await routeUser(result.user);
+        if (result.user) {
+          if (screenRef.current === 'home') await saveUser(result.user);
+          else await routeUser(result.user);
+        }
       } catch {
         // Keep the cached profile visible during a temporary connection loss.
       }
@@ -305,9 +310,7 @@ function NovoApp() {
       const updated = await purchaseAccessory(requireToken(), accessoryId);
       await saveUser(updated);
       if (updated.notificationPreferences.orders) {
-        void import('./src/notifications')
-          .then(({ sendLocalNotification }) => sendLocalNotification('Accessory unlocked', 'Your new in-app accessory is ready in the wardrobe.', 'home'))
-          .catch(() => undefined);
+        void sendLocalNotification('Accessory unlocked', 'Your new in-app accessory is ready in the wardrobe.', 'home').catch(() => undefined);
       }
     } catch (error) {
       showMutationError(error);
@@ -316,7 +319,6 @@ function NovoApp() {
   };
 
   const handleNotificationPreferences = async (preferences: User['notificationPreferences']) => {
-    const { syncNotificationSchedule } = await import('./src/notifications');
     const notificationsAvailable = await syncNotificationSchedule(preferences);
     if (Object.values(preferences).some(Boolean) && !notificationsAvailable) throw new Error('Notifications are disabled for novo in your device settings.');
     await saveUser(await updateNotificationPreferences(requireToken(), preferences));
@@ -332,7 +334,6 @@ function NovoApp() {
 
   const handleLinkAccount = async (provider: OAuthProvider) => {
     const authorizationUrl = await startLinkedAccount(requireToken(), provider);
-    const WebBrowser = await import('expo-web-browser');
     const result = await WebBrowser.openAuthSessionAsync(authorizationUrl, 'novo://auth/oauth');
     if (result.type !== 'success') throw new Error('Account linking was cancelled.');
     const url = new URL(result.url);
@@ -394,7 +395,7 @@ function NovoApp() {
     <SafeAreaProvider>
       <StatusBar style="dark" />
       {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
-      {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
+      {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => { setDraft(undefined); setScreen('onboarding'); }} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
       {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
       {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
@@ -407,9 +408,7 @@ function NovoApp() {
 export default function App() {
   return (
     <AppErrorBoundary>
-      <Suspense fallback={<View style={styles.loading}><ActivityIndicator color={colors.forest} size="large" /></View>}>
-        <NovoApp />
-      </Suspense>
+      <NovoApp />
     </AppErrorBoundary>
   );
 }

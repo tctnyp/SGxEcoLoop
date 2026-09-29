@@ -13,9 +13,11 @@ type Props = {
   keyboardType?: 'default' | 'email-address';
   error?: string;
   icon?: keyof typeof Ionicons.glyphMap;
+  returnKeyType?: 'done' | 'go' | 'next';
+  onSubmitEditing?: () => void;
 };
 
-export function TextField({ label, value, onChangeText, placeholder, secure, keyboardType, error, icon }: Props) {
+export function TextField({ label, value, onChangeText, placeholder, secure, keyboardType, error, icon, returnKeyType, onSubmitEditing }: Props) {
   const [hidden, setHidden] = useState(secure);
   const [focused, setFocused] = useState(false);
   const webOutlineStyle = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as never) : undefined;
@@ -40,6 +42,8 @@ export function TextField({ label, value, onChangeText, placeholder, secure, key
           accessibilityHint={secure ? 'Enter your account password' : 'Enter the email address for your novo account'}
           autoComplete={secure ? 'current-password' : keyboardType === 'email-address' ? 'email' : undefined}
           textContentType={secure ? 'password' : keyboardType === 'email-address' ? 'emailAddress' : 'none'}
+          returnKeyType={returnKeyType}
+          onSubmitEditing={onSubmitEditing}
         />
         {secure && (
           <Pressable onPress={() => setHidden((current) => !current)} hitSlop={8} accessibilityRole="button" accessibilityLabel={hidden ? 'Show password' : 'Hide password'} style={styles.visibilityButton}>
