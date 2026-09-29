@@ -28,7 +28,6 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
   const [step, setStep] = useState(0);
   const [name, setName] = useState(draft?.name ?? '');
   const [email, setEmail] = useState(draft?.email ?? '');
-  const [mascotName, setMascotName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [focus, setFocus] = useState('single-use');
@@ -38,14 +37,13 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
 
   const complete = async () => {
     const normalizedName = (name ?? '').trim();
-    const normalizedMascotName = (mascotName ?? '').trim();
     setLoading(true);
     setError('');
     try {
       const issue = passwordIssue(password);
       if (issue) throw new Error(issue);
       if (password !== confirmPassword) throw new Error('Passwords do not match.');
-      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), password, mascotName: normalizedMascotName, focus }));
+      await onComplete(await finishOnboarding({ name: normalizedName, email: email.trim(), password, focus }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'We could not create your profile. Try again.');
     } finally {
@@ -73,18 +71,17 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                   <View style={styles.blob} />
                   <Plushie />
                 </View>
-                <Text style={styles.eyebrow}>YOUR IN-APP CHANGE-MAKER</Text>
-                <Text style={styles.title}>Name your mascot</Text>
-                <Text style={styles.body}>Your wristband colour will reveal its animal after pairing. Every mascot shares the same accessory fit.</Text>
+                <Text style={styles.eyebrow}>CREATE YOUR NOVO ID</Text>
+                <Text style={styles.title}>Let’s get to know you</Text>
+                <Text style={styles.body}>Set up your account first. Your wristband colour will reveal your animal, then you’ll name your mascot together.</Text>
                 <View style={styles.fields}>
                   <TextField label="Your name" value={name} onChangeText={setName} placeholder="What should we call you?" icon="person-outline" />
                   <TextField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" icon="mail-outline" />
                   <TextField label="Password" value={password} onChangeText={setPassword} placeholder="9+ characters" secure icon="lock-closed-outline" />
                   <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Enter it again" secure icon="shield-checkmark-outline" />
                   <View style={styles.passwordChecklist}>{PASSWORD_REQUIREMENTS.map((requirement) => { const met = requirement.test(password); return <View key={requirement.key} style={styles.passwordRequirement}><Ionicons name={met ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={met ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, met && styles.passwordRequirementMet]}>{requirement.label}</Text></View>; })}<View style={styles.passwordRequirement}><Ionicons name={confirmPassword && password === confirmPassword ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={confirmPassword && password === confirmPassword ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, Boolean(confirmPassword && password === confirmPassword) && styles.passwordRequirementMet]}>Passwords match</Text></View></View>
-                  <TextField label="Mascot name" value={mascotName} onChangeText={setMascotName} placeholder="Name your in-app mascot" icon="leaf-outline" />
                 </View>
-                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !(mascotName ?? '').trim() || !email.includes('@') || !isStrongPassword(password) || password !== confirmPassword} icon="arrow-forward" />
+                <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !email.includes('@') || !isStrongPassword(password) || password !== confirmPassword} icon="arrow-forward" />
               </>
             ) : (
               <>
@@ -110,7 +107,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                   })}
                 </View>
                 {error ? <Text style={styles.error}>{error}</Text> : null}
-                <Button label="Let’s grow" onPress={complete} loading={loading} icon="sparkles" />
+                <Button label="Create account & pair wristband" onPress={complete} loading={loading} icon="radio-outline" />
               </>
             )}
           </View>

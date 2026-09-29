@@ -35,16 +35,20 @@ describe('novo API', () => {
   });
 
   it('creates an empty real profile after onboarding', async () => {
-    const { user } = await createMember('profile@example.com');
+    const { user, authorization } = await createMember('profile@example.com');
     const knownStatus = await request(app).post('/api/auth/email-status').send({ email: 'profile@example.com' });
     assert.equal(knownStatus.status, 200);
     assert.equal(knownStatus.body.exists, true);
     assert.equal(user.wristbandPaired, false);
+    assert.equal(user.onboardingCompleted, false);
+    assert.equal(user.mascotName, '');
     assert.equal(user.mascotType, 'polar-bear');
     assert.equal(user.points, 0);
     assert.equal(user.lifetimePoints, 0);
     assert.deepEqual(user.dailyQuests, []);
     assert.deepEqual(user.coupons, []);
+    const prematureName = await request(app).post('/api/member/onboarding/complete').set('authorization', authorization).send({ mascotName: 'Too Soon' });
+    assert.equal(prematureName.status, 409);
   });
 
   it('enforces the complete password policy and supports profile and password changes', async () => {
@@ -100,11 +104,16 @@ describe('novo API', () => {
     const paired = await request(app).post('/api/member/wristband/pair').set('authorization', authorization).send({ tagToken, pickupLocation: 'Pick! Locker @ Tampines' });
     assert.equal(paired.status, 200);
     assert.equal(paired.body.user.wristbandPaired, true);
+    assert.equal(paired.body.user.onboardingCompleted, false);
     assert.equal(paired.body.user.wristbandColor, 'sunset-orange');
     assert.equal(paired.body.user.mascotType, 'fox');
     assert.equal(paired.body.user.streak, 0);
     assert.equal(paired.body.user.lastWristbandTapAt, null);
     assert.deepEqual(paired.body.user.dailyQuests, []);
+    const named = await request(app).post('/api/member/onboarding/complete').set('authorization', authorization).send({ mascotName: 'Ember' });
+    assert.equal(named.status, 200);
+    assert.equal(named.body.user.mascotName, 'Ember');
+    assert.equal(named.body.user.onboardingCompleted, true);
     const interacted = await request(app).post('/api/member/wristband/interact').set('authorization', authorization).send({ tagToken });
     assert.equal(interacted.status, 200);
     assert.equal(interacted.body.user.streak, 1);

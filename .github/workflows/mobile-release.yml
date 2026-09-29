@@ -156,6 +156,22 @@ jobs:
           bundle_path="$(find "$app_path" -name 'main.jsbundle' -type f -print -quit)"
           test -n "$bundle_path"
           grep -aFq "$EXPO_PUBLIC_API_URL" "$bundle_path"
+          entitlements_path="$(find apps/mobile/ios -name '*.entitlements' -type f -print -quit)"
+          test -n "$entitlements_path"
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$entitlements_path" | grep -Fq 'TAG'
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$entitlements_path" | grep -Fq 'NDEF'; then
+            echo 'The deprecated NDEF Core NFC entitlement must not be shipped.' >&2
+            exit 1
+          fi
+          # Carry only Core NFC in an ad-hoc signature so iLoader/SideStore can
+          # preserve it without inheriting unrelated push/domain capabilities.
+          # No Apple distribution identity or production signing credential is used.
+          carrier_entitlements="$RUNNER_TEMP/novo-resign-entitlements.plist"
+          plutil -create xml1 "$carrier_entitlements"
+          plutil -insert 'com.apple.developer.nfc.readersession.formats' -json '["TAG"]' "$carrier_entitlements"
+          /usr/bin/codesign --force --sign - --entitlements "$carrier_entitlements" --generate-entitlement-der "$app_path"
+          /usr/bin/codesign -d --entitlements :- "$app_path" > "$RUNNER_TEMP/novo-requested-entitlements.plist"
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$RUNNER_TEMP/novo-requested-entitlements.plist" | grep -Fq 'TAG'
           mkdir -p "$RUNNER_TEMP/ipa/Payload" release-assets
           cp -R "$app_path" "$RUNNER_TEMP/ipa/Payload/"
           (
@@ -226,7 +242,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          notes="Four device builds from ${GITHUB_SHA}: development routes to https://novodev.tancheetiong.com/api; production routes to https://novo.tancheetiong.com/api. Android uses the generated local install signature. Both IPA files are unsigned for SideStore re-signing."
+          notes="Four device builds from ${GITHUB_SHA}: development routes to https://novodev.tancheetiong.com/api; production routes to https://novo.tancheetiong.com/api. Android uses the generated local install signature. The IPA files contain only an ad-hoc Core NFC entitlement carrier and still require iLoader or SideStore to re-sign them; no Apple distribution identity is used."
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else

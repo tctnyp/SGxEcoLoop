@@ -1,4 +1,4 @@
-export type Screen = 'signin' | 'onboarding' | 'pair-wristband' | 'home' | 'account-status';
+export type Screen = 'signin' | 'onboarding' | 'pair-wristband' | 'tutorial' | 'home' | 'account-status';
 export type AccountStatus = 'active' | 'limited' | 'suspended';
 
 export type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
@@ -40,6 +40,7 @@ export type User = {
   mascotType: MascotType;
   wristbandColor: WristbandColor;
   wristbandPaired: boolean;
+  onboardingCompleted: boolean;
   wristbandPickupLocation: string | null;
   accessories: AccessoryId[];
   equippedAccessories: AccessoryId[];

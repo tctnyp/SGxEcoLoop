@@ -20,7 +20,7 @@ function SurfaceMaterial({ color, kind, roughness = 0.84 }: { color: string; kin
 }
 
 function Eye({ x, y, z, scale = 1 }: { x: number; y: number; z: number; scale?: number }) {
-  return <group position={[x, y, z]} scale={scale}><mesh scale={[0.105, 0.125, 0.075]}><sphereGeometry args={[1, 20, 16]} /><meshPhysicalMaterial color="#101716" roughness={0.18} clearcoat={0.7} /></mesh><mesh position={[-0.03, 0.045, 0.07]} scale={0.026}><sphereGeometry args={[1, 12, 8]} /><meshBasicMaterial color="#FFFFFF" /></mesh></group>;
+  return <group position={[x, y, z]} scale={scale}><mesh scale={[0.118, 0.142, 0.082]}><sphereGeometry args={[1, 24, 18]} /><meshPhysicalMaterial color="#09100F" roughness={0.14} clearcoat={0.82} clearcoatRoughness={0.12} /></mesh><mesh position={[-0.034, 0.052, 0.084]} scale={0.031}><sphereGeometry args={[1, 12, 8]} /><meshBasicMaterial color="#FFFFFF" /></mesh><mesh position={[0.04, -0.045, 0.081]} scale={0.013}><sphereGeometry args={[1, 10, 8]} /><meshBasicMaterial color="#CDEDEA" /></mesh></group>;
 }
 
 function Smile({ y, z, color = '#352724' }: { y: number; z: number; color?: string }) {
@@ -37,7 +37,7 @@ function PolarBear() {
     {[-1, 1].map((side) => <group key={side} position={[side * 0.54, -1.39, 0.28]} rotation={[0.24, 0, side * 0.1]}><mesh scale={[0.48, 0.38, 0.65]}><sphereGeometry args={[0.83, 30, 22]} /><SurfaceMaterial color={color.body} kind="fur" /></mesh><mesh position={[0, -0.03, 0.49]} scale={[0.24, 0.17, 0.035]}><sphereGeometry args={[1, 18, 12]} /><meshStandardMaterial color="#73807D" roughness={0.88} /></mesh>{[-0.14, 0, 0.14].map((toe) => <mesh key={toe} position={[toe, 0.13, 0.51]} scale={[0.025, 0.075, 0.025]} rotation={[0.25, 0, 0]}><capsuleGeometry args={[1, 0.4, 4, 8]} /><meshStandardMaterial color="#3B4543" /></mesh>)}</group>)}
     <mesh position={[0, 0.43, 0.79]} scale={[0.54, 0.4, 0.3]}><sphereGeometry args={[0.78, 30, 22]} /><SurfaceMaterial color="#D9DEDA" kind="fur" /></mesh>
     <mesh position={[0, 0.58, 1.035]} scale={[0.17, 0.12, 0.095]}><sphereGeometry args={[1, 22, 16]} /><meshPhysicalMaterial color={color.dark} roughness={0.28} clearcoat={0.38} /></mesh>
-    <Eye x={-0.37} y={0.9} z={0.88} /><Eye x={0.37} y={0.9} z={0.88} /><Smile y={0.42} z={1.055} />
+    <Eye x={-0.37} y={0.9} z={1.01} /><Eye x={0.37} y={0.9} z={1.01} /><Smile y={0.42} z={1.055} />
     <mesh position={[0, -0.85, -0.72]} scale={[0.25, 0.3, 0.22]}><sphereGeometry args={[1, 22, 16]} /><SurfaceMaterial color={color.head} kind="fur" /></mesh>
   </group>;
 }
@@ -51,7 +51,7 @@ function Penguin() {
     {[-1, 1].map((side) => <mesh key={side} position={[side * 0.27, 0.77, 0.7]} rotation={[0, side * 0.04, side * 0.09]} scale={[0.39, 0.57, 0.16]}><sphereGeometry args={[1, 28, 20]} /><SurfaceMaterial color="#F8F5EA" kind="feather" /></mesh>)}
     {[-1, 1].map((side) => <mesh key={side} position={[side * 0.87, -0.38, -0.02]} rotation={[0.12, 0, side * 0.36]} scale={[0.19, 0.86, 0.42]}><capsuleGeometry args={[0.66, 0.82, 10, 22]} /><SurfaceMaterial color="#0E1314" kind="feather" /></mesh>)}
     <mesh position={[0, 0.58, 1.02]} rotation={[Math.PI / 2, 0, 0]} scale={[0.21, 0.35, 0.2]}><coneGeometry args={[1, 1, 4]} /><meshPhysicalMaterial color="#F0A22E" roughness={0.64} clearcoat={0.08} /></mesh>
-    <Eye x={-0.34} y={0.91} z={0.84} scale={0.92} /><Eye x={0.34} y={0.91} z={0.84} scale={0.92} />
+    <Eye x={-0.34} y={0.93} z={0.97} scale={1.12} /><Eye x={0.34} y={0.93} z={0.97} scale={1.12} />
     {[-1, 1].map((side) => <group key={side} position={[side * 0.45, -1.59, 0.42]}><mesh scale={[0.49, 0.13, 0.54]}><sphereGeometry args={[1, 24, 16]} /><meshStandardMaterial color="#E99A28" roughness={0.7} /></mesh>{[-0.18, 0, 0.18].map((toe) => <mesh key={toe} position={[toe, 0, 0.38]} rotation={[Math.PI / 2, 0, 0]} scale={[0.06, 0.23, 0.06]}><capsuleGeometry args={[1, 0.7, 5, 10]} /><meshStandardMaterial color="#DB8720" /></mesh>)}</group>)}
     <mesh position={[0, -1.26, -0.62]} rotation={[-0.45, 0, 0]} scale={[0.3, 0.38, 0.18]}><coneGeometry args={[1, 1.4, 4]} /><SurfaceMaterial color="#111617" kind="feather" /></mesh>
   </group>;
@@ -66,7 +66,7 @@ function Fox() {
     <mesh position={[0, 0.43, 0.84]} scale={[0.45, 0.3, 0.43]}><sphereGeometry args={[1, 30, 22]} /><SurfaceMaterial color={color.accent} kind="fur" /></mesh>
     {[-1, 1].map((side) => <mesh key={side} position={[side * 0.34, 0.47, 0.79]} scale={[0.34, 0.28, 0.21]}><sphereGeometry args={[1, 26, 18]} /><SurfaceMaterial color={color.accent} kind="fur" /></mesh>)}
     <mesh position={[0, 0.51, 1.17]} scale={[0.14, 0.1, 0.095]}><sphereGeometry args={[1, 20, 14]} /><meshPhysicalMaterial color={color.dark} roughness={0.26} clearcoat={0.42} /></mesh>
-    <Eye x={-0.33} y={0.91} z={0.82} scale={0.9} /><Eye x={0.33} y={0.91} z={0.82} scale={0.9} /><Smile y={0.35} z={1.11} />
+    <Eye x={-0.33} y={0.91} z={0.94} scale={0.96} /><Eye x={0.33} y={0.91} z={0.94} scale={0.96} /><Smile y={0.35} z={1.11} />
     <mesh position={[0, -0.25, 0.68]} scale={[0.46, 0.74, 0.17]}><sphereGeometry args={[1, 28, 20]} /><SurfaceMaterial color={color.accent} kind="fur" /></mesh>
     {[-1, 1].map((side) => <group key={side}><mesh position={[side * 0.76, -0.48, 0]} rotation={[0, 0, side * 0.4]} scale={[0.33, 0.77, 0.34]}><capsuleGeometry args={[0.58, 0.72, 10, 22]} /><SurfaceMaterial color={color.body} kind="fur" /></mesh><mesh position={[side * 1.01, -0.9, 0.05]} rotation={[0, 0, side * 0.34]} scale={[0.3, 0.33, 0.32]}><sphereGeometry args={[1, 24, 18]} /><SurfaceMaterial color={color.dark} kind="fur" /></mesh></group>)}
     {[-1, 1].map((side) => <group key={side}><mesh position={[side * 0.5, -1.28, 0.18]} scale={[0.38, 0.58, 0.4]}><capsuleGeometry args={[0.6, 0.5, 10, 20]} /><SurfaceMaterial color={color.dark} kind="fur" /></mesh><mesh position={[side * 0.5, -1.62, 0.43]} scale={[0.42, 0.24, 0.54]}><sphereGeometry args={[1, 26, 18]} /><SurfaceMaterial color="#2B211F" kind="fur" /></mesh></group>)}
@@ -87,7 +87,7 @@ function Turtle() {
     {[-1, 1].map((side) => <mesh key={side} position={[side * 0.82, -0.48, 0.02]} rotation={[0.08, 0, side * 0.42]} scale={[0.39, 0.73, 0.33]}><capsuleGeometry args={[0.58, 0.7, 10, 22]} /><SurfaceMaterial color={color.head} kind="scale" /></mesh>)}
     {[-1, 1].map((side) => <mesh key={side} position={[side * 0.51, -1.42, 0.27]} rotation={[0.16, 0, side * 0.08]} scale={[0.48, 0.35, 0.62]}><sphereGeometry args={[0.8, 28, 20]} /><SurfaceMaterial color={color.head} kind="scale" /></mesh>)}
     <mesh position={[0, 0.51, 0.82]} rotation={[Math.PI / 2, 0, 0]} scale={[0.28, 0.23, 0.16]}><coneGeometry args={[1, 0.85, 4]} /><meshStandardMaterial color="#D8C586" roughness={0.74} /></mesh>
-    <Eye x={-0.31} y={0.8} z={0.75} scale={0.9} /><Eye x={0.31} y={0.8} z={0.75} scale={0.9} /><Smile y={0.43} z={0.9} color="#204731" />
+    <Eye x={-0.31} y={0.8} z={0.92} scale={0.96} /><Eye x={0.31} y={0.8} z={0.92} scale={0.96} /><Smile y={0.43} z={0.9} color="#204731" />
     <mesh position={[0, -1.28, -0.72]} rotation={[-0.42, 0, 0]} scale={[0.23, 0.37, 0.18]}><coneGeometry args={[1, 1.3, 5]} /><SurfaceMaterial color={color.head} kind="scale" /></mesh>
   </group>;
 }
@@ -100,7 +100,7 @@ function Bird() {
     <mesh position={[0, -0.36, 0.66]} scale={[0.59, 0.84, 0.17]}><sphereGeometry args={[0.92, 32, 24]} /><SurfaceMaterial color={color.accent} kind="feather" /></mesh>
     {[-1, 1].map((side) => <group key={side} position={[side * 0.82, -0.42, -0.02]} rotation={[0.06, side * 0.03, side * 0.48]}><mesh scale={[0.28, 0.9, 0.47]}><capsuleGeometry args={[0.7, 0.7, 10, 22]} /><SurfaceMaterial color="#2F73AD" kind="feather" /></mesh>{[0.2, -0.08, -0.36].map((y, index) => <mesh key={y} position={[side * 0.08, y, 0.4]} rotation={[0, 0, side * -0.08]} scale={[0.19 - index * 0.025, 0.42, 0.07]}><sphereGeometry args={[1, 20, 14]} /><SurfaceMaterial color={index % 2 ? '#5EA6D6' : '#70B4DF'} kind="feather" /></mesh>)}</group>)}
     <mesh position={[0, 0.57, 1.01]} rotation={[Math.PI / 2, 0, 0]} scale={[0.2, 0.35, 0.2]}><coneGeometry args={[1, 1.08, 4]} /><meshPhysicalMaterial color="#E7A62F" roughness={0.62} clearcoat={0.08} /></mesh>
-    <Eye x={-0.32} y={0.89} z={0.8} scale={0.94} /><Eye x={0.32} y={0.89} z={0.8} scale={0.94} />
+    <Eye x={-0.32} y={0.89} z={0.93} scale={1.02} /><Eye x={0.32} y={0.89} z={0.93} scale={1.02} />
     <group position={[0, 1.46, -0.04]} rotation={[0.05, 0, -0.15]}>{[-0.14, 0, 0.14].map((x, index) => <mesh key={x} position={[x, index === 1 ? 0.12 : 0, 0]} rotation={[0, 0, x * -1.4]} scale={[0.12, 0.43 + index * 0.06, 0.13]}><coneGeometry args={[1, 1.6, 5]} /><SurfaceMaterial color={index === 1 ? '#82C4E7' : '#6DB2DC'} kind="feather" /></mesh>)}</group>
     <group position={[0, -1.35, -0.56]}>{[-0.3, 0, 0.3].map((x) => <mesh key={x} position={[x, 0, 0]} rotation={[0.34, 0, -x]} scale={[0.2, 0.7, 0.12]}><capsuleGeometry args={[0.6, 0.6, 8, 16]} /><SurfaceMaterial color="#28689E" kind="feather" /></mesh>)}</group>
     {[-1, 1].map((side) => <group key={side} position={[side * 0.4, -1.57, 0.38]}><mesh scale={[0.09, 0.22, 0.09]}><capsuleGeometry args={[1, 0.4, 5, 10]} /><meshStandardMaterial color="#A96D28" /></mesh>{[-0.12, 0, 0.12].map((toe) => <mesh key={toe} position={[toe, -0.12, 0.17]} rotation={[Math.PI / 2, 0, 0]} scale={[0.035, 0.18, 0.035]}><capsuleGeometry args={[1, 0.5, 5, 10]} /><meshStandardMaterial color="#9A6125" /></mesh>)}</group>)}

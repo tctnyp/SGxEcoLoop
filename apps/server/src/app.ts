@@ -23,6 +23,7 @@ type User = {
   mascotType: MascotType;
   wristbandColor: WristbandColor;
   wristbandPaired: boolean;
+  onboardingCompleted: boolean;
   wristbandPickupLocation: string | null;
   accessories: AccessoryId[];
   equippedAccessories: AccessoryId[];
@@ -171,7 +172,7 @@ function createCredential(email: string, password: string): Credential {
   return { email: email.toLowerCase(), salt, passwordHash: scryptSync(password, salt, 64).toString('hex') };
 }
 
-function createMember(input: { name: string; email: string; mascotName: string; password?: string }) {
+function createMember(input: { name: string; email: string; mascotName?: string; onboardingCompleted?: boolean; password?: string }) {
   const email = input.email.toLowerCase();
   if (users.has(email) || findPortalAccountByEmail(email)) throw Object.assign(new Error('An account already exists for this email.'), { statusCode: 409 });
   const user: User = {
@@ -181,10 +182,11 @@ function createMember(input: { name: string; email: string; mascotName: string; 
     email,
     avatarDataUrl: null,
     linkedAccounts: [],
-    mascotName: input.mascotName,
+    mascotName: input.mascotName ?? 'Nova',
     mascotType: 'polar-bear',
     wristbandColor: 'snowy-white',
     wristbandPaired: false,
+    onboardingCompleted: input.onboardingCompleted ?? true,
     wristbandPickupLocation: null,
     accessories: ['bright-star'],
     equippedAccessories: ['bright-star'],
@@ -283,6 +285,7 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
     user.mascotType ??= 'polar-bear';
     user.wristbandColor ??= 'snowy-white';
     user.wristbandPaired ??= legacy.plushiePaired ?? false;
+    if (user.onboardingCompleted === undefined) { user.onboardingCompleted = true; changed = true; }
     user.wristbandPickupLocation ??= null;
     user.lastWristbandTapAt ??= legacy.lastPlushieScanAt ?? null;
     user.questBoardDate ??= null;
@@ -390,9 +393,9 @@ const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
   password: strongPasswordSchema.optional(),
-  mascotName: z.string().trim().min(1).max(30),
   focus: z.enum(['single-use', 'food', 'repair']),
 });
+const completeOnboardingSchema = z.object({ mascotName: z.string().trim().min(1).max(30) });
 
 const webRegistrationSchema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -1227,7 +1230,7 @@ app.post('/api/auth/google', async (request, response, next) => {
 app.post('/api/auth/onboarding', async (request, response, next) => {
   try {
     const input = onboardingSchema.parse(request.body);
-    const user = createMember(input);
+    const user = createMember({ ...input, mascotName: '', onboardingCompleted: false });
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
     response.status(201).json({ isNewUser: false, token, user, accountStatus: 'active' });
@@ -1248,6 +1251,20 @@ app.get('/api/member/profile', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
   response.json({ user, accountStatus: portalAccounts.get(user.id)?.status ?? 'active' });
+});
+
+app.post('/api/member/onboarding/complete', (request, response, next) => {
+  try {
+    const user = memberFromRequest(request);
+    if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+    if (!user.wristbandPaired) return response.status(409).json({ message: 'Pair your wristband before naming your mascot.' });
+    const { mascotName } = completeOnboardingSchema.parse(request.body);
+    user.mascotName = mascotName;
+    user.onboardingCompleted = true;
+    response.json({ user });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.patch('/api/member/profile', (request, response, next) => {
@@ -2001,6 +2018,7 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',
         wristbandPaired: false,
+        onboardingCompleted: true,
         wristbandPickupLocation: null,
         accessories: [],
         equippedAccessories: [],
@@ -2036,7 +2054,7 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
     account.email = account.email.toLowerCase();
     let member = findUser(account.id);
     if (account.role === 'member' && !member) {
-      member = {
+      const createdMember: User = {
         id: account.id,
         name: account.name,
         username: account.email.split('@')[0] || `member-${account.id.slice(0, 8)}`,
@@ -2047,6 +2065,7 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
         mascotType: 'polar-bear',
         wristbandColor: 'snowy-white',
         wristbandPaired: false,
+        onboardingCompleted: true,
         wristbandPickupLocation: null,
         accessories: [],
         equippedAccessories: [],
@@ -2060,7 +2079,8 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
         dailyQuests: [],
         coupons: [],
       };
-      users.set(account.email, member);
+      member = createdMember;
+      users.set(account.email, createdMember);
     } else if (member) {
       users.delete(member.email.toLowerCase());
       member.name = account.name;

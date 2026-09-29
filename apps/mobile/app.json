@@ -53,7 +53,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Novo to scan the QR code on your plushie accessory."
+          "cameraPermission": "Allow novo to photograph task evidence and scan in-app reward codes."
         }
       ],
       "expo-asset",
@@ -67,14 +67,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow novo to attach evidence to your custom task.",
+          "photosPermission": "novo only uses photos captured inside the app for task evidence.",
           "cameraPermission": "Allow novo to photograph evidence for your custom task."
         }
       ],
       [
         "react-native-nfc-manager",
         {
-          "nfcPermission": "Allow novo to pair and interact with your plushie."
+          "nfcPermission": "Allow novo to pair and interact with your wristband.",
+          "includeNdefEntitlement": false
         }
       ],
       "./plugins/withAndroidCleartext",

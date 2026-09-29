@@ -109,13 +109,20 @@ export function finishOnboarding(input: {
   name: string;
   email: string;
   password: string;
-  mascotName: string;
   focus: string;
 }): Promise<AuthResult> {
   return request<AuthResult>('/auth/onboarding', {
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+export async function completeMemberOnboarding(token: string, mascotName: string): Promise<User> {
+  const result = await request<{ user: User }>('/member/onboarding/complete', {
+    method: 'POST',
+    body: JSON.stringify({ mascotName }),
+  }, token);
+  return result.user;
 }
 
 export function exchangeMobileHandoff(handoffToken: string): Promise<AuthResult> {
