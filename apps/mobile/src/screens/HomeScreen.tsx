@@ -5,7 +5,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as Location from 'expo-location';
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Alert, Animated, DimensionValue, Easing, Image, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, DimensionValue, Easing, Image, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, Share, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
 import Svg, { Circle, Defs, RadialGradient as SvgRadialGradient, Stop } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -159,7 +159,7 @@ export function HomeScreen(props: Props) {
         <GridBackground color={palette.outlineVariant} opacity={0.32} />
         {tab !== 'tasks' && <AppHeader />}
         <View style={styles.body}>
-          {tab === 'home' && <HomePage user={props.user} palette={palette} nfcStatus={nfcStatus} nfcMessage={nfcMessage} celebrationKey={celebrationKey} onToggleAccessory={props.onToggleAccessory} />}
+          {tab === 'home' && <HomePage user={props.user} palette={palette} nfcStatus={nfcStatus} nfcMessage={nfcMessage} celebrationKey={celebrationKey} onToggleAccessory={props.onToggleAccessory} onOpenTasks={() => changeTab('tasks')} />}
           {tab === 'marketplace' && <MarketplacePage user={props.user} token={props.token} palette={palette} onPurchase={props.onPurchase} onContribute={props.onContribute} onRedeemCoupon={props.onRedeemCoupon} />}
           {tab === 'tasks' && <TasksPage token={props.token} palette={palette} onUserUpdated={props.onUserUpdated} />}
           {tab === 'friends' && <FriendsPage user={props.user} token={props.token} palette={palette} />}
@@ -198,30 +198,43 @@ function AppHeader() {
   );
 }
 
-function HomePage({ user, palette, nfcStatus, nfcMessage, celebrationKey, onToggleAccessory }: { user: User; palette: Palette; nfcStatus: 'starting' | 'ready' | 'reading' | 'error' | 'web'; nfcMessage: string; celebrationKey: number; onToggleAccessory: (id: AccessoryId) => void }) {
+function HomePage({ user, palette, nfcStatus, nfcMessage, celebrationKey, onToggleAccessory, onOpenTasks }: { user: User; palette: Palette; nfcStatus: 'starting' | 'ready' | 'reading' | 'error' | 'web'; nfcMessage: string; celebrationKey: number; onToggleAccessory: (id: AccessoryId) => void; onOpenTasks: () => void }) {
   const [showCloset, setShowCloset] = useState(false);
   const [accessoryFilter, setAccessoryFilter] = useState<AccessoryFilter>('all');
+  const { height, width } = useWindowDimensions();
+  const compactHome = height < 760 || width < 350;
   const reduceMotion = useReduceMotionPreference();
   const level = useMemo(() => getLifetimeLevel(user.lifetimePoints), [user.lifetimePoints]);
+  const availableCategoryFilters = useMemo(
+    () => categoryFilters.filter((filter) => filter.id === 'all' || user.accessories.some((id) => ACCESSORIES.find((item) => item.id === id)?.category === filter.id)),
+    [user.accessories],
+  );
   const visibleAccessories = useMemo(
     () => ACCESSORIES
-      .filter((item) => accessoryFilter === 'all' || item.category === accessoryFilter)
+      .filter((item) => user.accessories.includes(item.id) && (accessoryFilter === 'all' || item.category === accessoryFilter))
       .sort((left, right) => rarityRank[right.rarity] - rarityRank[left.rarity] || left.name.localeCompare(right.name)),
-    [accessoryFilter],
+    [accessoryFilter, user.accessories],
   );
-  const progressWidth = `${Math.max(4, Math.round(level.progress * 100))}%` as DimensionValue;
+  useEffect(() => {
+    if (!availableCategoryFilters.some((filter) => filter.id === accessoryFilter)) setAccessoryFilter('all');
+  }, [accessoryFilter, availableCategoryFilters]);
+  const progressPercent = Math.round(level.progress * 100);
+  const progressWidth = `${progressPercent === 0 ? 0 : Math.max(3, progressPercent)}%` as DimensionValue;
+  const leavesToNextLevel = Math.max(0, level.required - level.current);
   const dailyGreetingDue = !scannedToday(user.lastWristbandTapAt);
   const firstGreeting = !user.lastWristbandTapAt;
+  const completedQuestCount = user.dailyQuests.filter((quest) => quest.completed).length;
+  const questCount = user.dailyQuests.length;
   const dailyInteractionCopy = nfcStatus === 'reading' ? `Checking in with ${user.mascotName}…` : nfcStatus === 'starting' ? 'Getting NFC ready…' : nfcStatus === 'ready' ? 'NFC is ready—tap your novo wristband to refresh today’s quests.' : nfcMessage;
 
   return (
-    <View style={[styles.homePage, showCloset && { paddingBottom: 92 }]}>
+    <View style={[styles.homePage, compactHome && { paddingHorizontal: 18 }, showCloset && { paddingBottom: 92 }]}>
       <View style={[styles.homeGlowBackdrop, { pointerEvents: 'none' }]}><AccessoryGlow accessories={user.equippedAccessories} /></View>
       {celebrationKey > 0 && <View key={celebrationKey} style={[styles.homeCelebration, { pointerEvents: 'none' }]}><ConfettiBurst colors={[palette.primary, palette.secondary, '#FF8178', '#55C4D8']} /></View>}
       <View style={styles.homeOverview}>
         <View style={styles.greetingBlock}><Text style={styles.hello}>Hi, {user.name.split(' ')[0]}</Text><Text style={styles.helloSub}>Small choices, big change.</Text></View>
         <View style={styles.homeStats}>
-          <View accessible accessibilityLabel={`${user.streak} day streak`} style={[styles.streakPill, { backgroundColor: withAlpha(palette.surfaceBright, 0.9), borderColor: palette.outlineVariant }]}><Text style={styles.statEmoji}>🔥</Text><Text style={[styles.statNumber, { color: palette.onSurface }]}>{user.streak}</Text></View>
+          <View accessible accessibilityLabel={`${user.streak} day wristband streak${dailyGreetingDue ? '. Tap your wristband today to continue it.' : '. Today is complete.'}`} style={[styles.streakPill, { backgroundColor: withAlpha(palette.surfaceBright, 0.9), borderColor: palette.outlineVariant }]}><Ionicons name={dailyGreetingDue ? 'flame-outline' : 'flame'} size={17} color={dailyGreetingDue ? '#B84C27' : '#E7662F'} /><Text style={[styles.statNumber, { color: palette.onSurface }]}>{user.streak}</Text></View>
           <View accessible accessibilityLabel={`${user.points} spendable leaves`} style={[styles.pointsPill, { backgroundColor: palette.primary }]}><Ionicons name="leaf" size={15} color={palette.onPrimary} /><Text style={[styles.statNumber, { color: palette.onPrimary }]}>{user.points}</Text></View>
         </View>
       </View>
@@ -232,20 +245,21 @@ function HomePage({ user, palette, nfcStatus, nfcMessage, celebrationKey, onTogg
           <View style={[styles.levelPill, { backgroundColor: palette.primaryContainer }]}><Text style={[styles.levelText, { color: palette.onPrimaryContainer }]}>Level {level.level}</Text></View>
         </View>
         <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: level.required, now: level.current, text: `${Math.round(level.progress * 100)} percent to level ${level.level + 1}` }} style={[styles.levelTrack, { backgroundColor: palette.surfaceContainerHigh }]}><View style={[styles.levelFill, { width: progressWidth, backgroundColor: palette.primary }]} /></View>
-        <View style={styles.levelFooter}><Text style={styles.levelProgress}>{level.current.toLocaleString()} / {level.required.toLocaleString()}</Text><Text style={styles.levelNext}>to level {level.level + 1}</Text></View>
+        <View style={styles.levelFooter}><Text style={[styles.levelProgress, { color: palette.onSurface }]}>{progressPercent}% complete</Text><Text style={[styles.levelNext, { color: palette.onSurfaceVariant }]}>{leavesToNextLevel.toLocaleString()} to level {level.level + 1}</Text></View>
       </View>
 
       <View style={[
         styles.sceneArea,
-        dailyGreetingDue && !showCloset && { minHeight: 142, marginTop: 2, marginBottom: 0 },
-        showCloset && { minHeight: 180, marginTop: 2, marginBottom: 0 },
+        dailyGreetingDue && !showCloset && { minHeight: compactHome ? 116 : 142, marginTop: 2, marginBottom: 0 },
+        showCloset && { minHeight: compactHome ? 146 : 180, marginTop: 2, marginBottom: 0 },
+        !dailyGreetingDue && !showCloset && compactHome && { minHeight: 184 },
       ]}>
         <InteractiveMascot name={user.mascotName} mascotType={user.mascotType} accessories={user.equippedAccessories} palette={palette} autoRotate={!reduceMotion} compact={showCloset} />
       </View>
 
       <View style={[
         styles.homeBottom,
-        showCloset && { position: 'absolute', left: 24, right: 24, bottom: 96, width: undefined, paddingTop: 0 },
+        showCloset && { position: 'absolute', left: compactHome ? 18 : 24, right: compactHome ? 18 : 24, bottom: 96, width: undefined, paddingTop: 0 },
       ]}>
         <View style={[styles.plushieIdentity, showCloset && { paddingTop: 0, paddingBottom: 7 }]}>
           <Text style={styles.plushieName}>{user.mascotName}</Text>
@@ -272,33 +286,34 @@ function HomePage({ user, palette, nfcStatus, nfcMessage, celebrationKey, onTogg
         )}
 
         {showCloset ? (
-          <GlassPanel style={[styles.closet, { height: 210 }]}>
-          <View style={styles.closetTop}><View><Text style={styles.closetTitle}>Wardrobe</Text><Text style={styles.closetHint}>Rarest first · wear more than one</Text></View><Pressable onPress={() => setShowCloset(false)} accessibilityRole="button" accessibilityLabel="Close wardrobe" style={styles.miniClose}><Ionicons name="close" size={18} color={colors.ink} /></Pressable></View>
+          <GlassPanel style={[styles.closet, { height: compactHome ? 194 : 210 }]}>
+          <View style={[styles.closetTop, compactHome && { minHeight: 38 }]}><View><Text style={[styles.closetTitle, { color: palette.onSurface }]}>Wardrobe</Text><Text style={[styles.closetHint, { color: palette.onSurfaceVariant }]}>{user.equippedAccessories.length} equipped · tap an item to change</Text></View><Pressable onPress={() => setShowCloset(false)} accessibilityRole="button" accessibilityLabel="Close wardrobe" style={[styles.miniClose, { backgroundColor: withAlpha(palette.surfaceBright, 0.72) }]}><Ionicons name="close" size={18} color={palette.onSurface} /></Pressable></View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroller} contentContainerStyle={styles.categoryList}>
-            {categoryFilters.map((category) => {
+            {availableCategoryFilters.map((category) => {
               const active = accessoryFilter === category.id;
               return <Pressable key={category.id} onPress={() => setAccessoryFilter(category.id)} accessibilityRole="tab" accessibilityState={{ selected: active }} style={[styles.categoryChip, { minHeight: 34, backgroundColor: active ? palette.deep : palette.surfaceContainer }]}><Text style={[styles.categoryChipText, { color: active ? '#FFFFFF' : palette.onSurfaceVariant }]}>{category.label}</Text></Pressable>;
             })}
           </ScrollView>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.accessoryScroller} contentContainerStyle={styles.accessoryList}>
             {visibleAccessories.map((item) => {
-              const owned = user.accessories.includes(item.id);
               const equipped = user.equippedAccessories.includes(item.id);
               const rarity = rarityColors[item.rarity];
               const itemScheme = createAccessoryColorScheme([item.id]);
               return (
-                <Pressable key={item.id} disabled={!owned} onPress={() => onToggleAccessory(item.id)} accessibilityRole="switch" accessibilityLabel={`${item.name}, ${categoryLabel(item.category)}, ${item.rarity}`} accessibilityState={{ checked: equipped, disabled: !owned }} style={[styles.accessoryCard, { height: 92, backgroundColor: itemScheme.primaryContainer, borderColor: equipped ? itemScheme.deep : itemScheme.outlineVariant }, equipped && styles.accessoryChipActive, !owned && styles.locked]}>
-                  <View style={styles.accessoryCardTop}><View style={[styles.accessoryIconBubble, { backgroundColor: withAlpha(itemScheme.surfaceBright, 0.72) }]}><Ionicons name={accessoryIcon(item.id)} size={19} color={itemScheme.onPrimaryContainer} /></View><Ionicons name={equipped ? 'checkmark-circle' : owned ? 'add-circle-outline' : 'lock-closed'} size={17} color={itemScheme.deep} /></View>
+                <Pressable key={item.id} onPress={() => onToggleAccessory(item.id)} accessibilityRole="switch" accessibilityLabel={`${item.name}, ${categoryLabel(item.category)}, ${item.rarity}`} accessibilityHint={equipped ? 'Removes this accessory from your mascot' : 'Equips this accessory on your mascot'} accessibilityState={{ checked: equipped }} style={({ pressed }) => [styles.accessoryCard, { height: compactHome ? 82 : 92, backgroundColor: itemScheme.primaryContainer, borderColor: equipped ? itemScheme.deep : itemScheme.outlineVariant }, equipped && styles.accessoryChipActive, pressed && styles.cardPressed]}>
+                  <View style={styles.accessoryCardTop}><View style={[styles.accessoryIconBubble, { backgroundColor: withAlpha(itemScheme.surfaceBright, 0.72) }]}><Ionicons name={accessoryIcon(item.id)} size={19} color={itemScheme.onPrimaryContainer} /></View><Ionicons name={equipped ? 'checkmark-circle' : 'add-circle-outline'} size={17} color={itemScheme.deep} /></View>
                   <Text style={[styles.accessoryChipText, { color: itemScheme.onPrimaryContainer }]} numberOfLines={1}>{item.name}</Text>
                   <View style={styles.accessoryMeta}><Text style={[styles.accessoryCategory, { color: itemScheme.onPrimaryContainer }]}>{categoryLabel(item.category)}</Text><View style={[styles.rarityPill, { backgroundColor: rarity.background }]}><Text style={[styles.rarityText, { color: rarity.text }]}>{item.rarity}</Text></View></View>
                 </Pressable>
               );
             })}
+            {!visibleAccessories.length && <View style={{ width: 210, minHeight: 82, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 5 }}><Ionicons name="shirt-outline" size={20} color={palette.onSurfaceVariant} /><Text style={{ color: palette.onSurfaceVariant, fontSize: 11, lineHeight: 15, textAlign: 'center' }}>No accessories in this category yet.</Text></View>}
           </ScrollView>
           </GlassPanel>
         ) : (
           <View style={styles.homeActions}>
-            <Pressable onPress={() => setShowCloset(true)} accessibilityRole="button" accessibilityLabel={`Open wardrobe. ${user.equippedAccessories.length} accessories equipped.`} accessibilityHint="Choose which digital accessories your mascot wears" style={[styles.homeActionPrimary, { backgroundColor: palette.deep }]}><Ionicons name="shirt-outline" size={20} color="#FFFFFF" /><Text style={styles.homeActionPrimaryText}>Accessories</Text><View style={[styles.stackBadge, { backgroundColor: palette.tertiaryContainer }]}><Text style={[styles.stackBadgeText, { color: palette.onTertiaryContainer }]}>{user.equippedAccessories.length}</Text></View></Pressable>
+            <Pressable onPress={() => setShowCloset(true)} accessibilityRole="button" accessibilityLabel={`Open wardrobe. ${user.equippedAccessories.length} accessories equipped.`} accessibilityHint="Choose which digital accessories your mascot wears" style={({ pressed }) => [styles.homeActionPrimary, { backgroundColor: palette.deep }, pressed && styles.cardPressed]}><Ionicons name="shirt-outline" size={20} color="#FFFFFF" /><Text style={styles.homeActionPrimaryText}>Wardrobe</Text><View style={[styles.stackBadge, { backgroundColor: palette.tertiaryContainer }]}><Text style={[styles.stackBadgeText, { color: palette.onTertiaryContainer }]}>{user.equippedAccessories.length}</Text></View></Pressable>
+            {!dailyGreetingDue && <Pressable onPress={onOpenTasks} accessibilityRole="button" accessibilityLabel={`${completedQuestCount} of ${questCount} daily quests complete. Open Tasks.`} style={({ pressed }) => [styles.homeActionSecondary, { flex: 0.82, minWidth: 124, borderWidth: 1, backgroundColor: withAlpha(palette.surfaceBright, 0.84), borderColor: palette.outlineVariant }, pressed && styles.cardPressed]}><Ionicons name={questCount > 0 && completedQuestCount === questCount ? 'checkmark-circle' : 'sparkles-outline'} size={19} color={palette.deep} /><View><Text style={[styles.homeActionSecondaryText, { color: palette.onSurface, fontSize: 14, lineHeight: 17 }]}>Today</Text><Text style={{ color: palette.onSurfaceVariant, fontSize: 10, lineHeight: 13, fontWeight: '600' }}>{questCount ? `${completedQuestCount} / ${questCount} quests` : 'Explore tasks'}</Text></View></Pressable>}
           </View>
         )}
       </View>
