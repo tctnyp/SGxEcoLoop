@@ -203,6 +203,13 @@ async function retireLegacyState() {
 
 let writeQueue = Promise.resolve();
 
+function snapshotCollections(collections: PersistedCollections): PersistedCollections {
+  return Object.fromEntries(Object.entries(collections).map(([name, records]) => [
+    name,
+    new Map([...records].map(([key, value]) => [key, structuredClone(value)])),
+  ]));
+}
+
 export async function initializeDatabase(collections: PersistedCollections) {
   await createSchema();
   let needsWrite = false;
@@ -215,8 +222,10 @@ export async function initializeDatabase(collections: PersistedCollections) {
 }
 
 export function persistDatabase(collections: PersistedCollections) {
-  writeQueue = writeQueue.then(() => writeCollections(collections));
-  return writeQueue;
+  const snapshot = snapshotCollections(collections);
+  const operation = writeQueue.then(() => writeCollections(snapshot));
+  writeQueue = operation.catch(() => undefined);
+  return operation;
 }
 
 export async function resetDatabase() {
