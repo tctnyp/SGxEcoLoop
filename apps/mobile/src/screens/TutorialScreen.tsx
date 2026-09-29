@@ -13,7 +13,6 @@ import { MascotType, User } from '../types';
 type Props = {
   user: User;
   onComplete: (mascotName: string) => Promise<User>;
-  onSignOut: () => void;
 };
 
 const lessons = [
@@ -55,7 +54,7 @@ const wristbandLabels: Record<User['wristbandColor'], string> = {
   'ocean-blue': 'Ocean Blue',
 };
 
-export function TutorialScreen({ user, onComplete, onSignOut }: Props) {
+export function TutorialScreen({ user, onComplete }: Props) {
   const [step, setStep] = useState(0);
   const [mascotName, setMascotName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -63,14 +62,7 @@ export function TutorialScreen({ user, onComplete, onSignOut }: Props) {
   const lesson = lessons[step] ?? lessons[0]!;
   const progress = useMemo<DimensionValue>(() => `${((step + 1) / lessons.length) * 100}%`, [step]);
 
-  const next = async () => {
-    if (step < lessons.length - 1) {
-      setError('');
-      setStep((current) => current + 1);
-      return;
-    }
-    const name = mascotName.trim();
-    if (!name) return;
+  const finish = async (name: string) => {
     setLoading(true);
     setError('');
     try {
@@ -82,12 +74,27 @@ export function TutorialScreen({ user, onComplete, onSignOut }: Props) {
     }
   };
 
+  const next = async () => {
+    if (step < lessons.length - 1) {
+      setError('');
+      setStep((current) => current + 1);
+      return;
+    }
+    const name = mascotName.trim();
+    if (!name) return;
+    await finish(name);
+  };
+
+  const skip = () => finish(mascotName.trim() || 'Nova');
+
   return <SafeAreaView style={styles.safe}>
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.topbar}>
         {step > 0 ? <Pressable onPress={() => setStep((current) => current - 1)} accessibilityRole="button" accessibilityLabel="Previous tutorial step" style={styles.roundButton}><Ionicons name="arrow-back" size={21} color={colors.ink} /></Pressable> : <Logo compact />}
         <Text style={styles.step}>STEP {step + 1} OF {lessons.length}</Text>
-        <Pressable onPress={onSignOut} accessibilityRole="button" style={styles.exit}><Text style={styles.exitText}>Sign out</Text></Pressable>
+        {step < lessons.length - 1
+          ? <Pressable onPress={() => void skip()} disabled={loading} accessibilityRole="button" accessibilityLabel="Skip tutorial" style={({ pressed }) => [styles.skip, pressed && styles.skipPressed, loading && styles.skipDisabled]}><Text style={styles.skipText}>Skip</Text></Pressable>
+          : <View style={styles.topbarEndSpacer} />}
       </View>
       <View style={styles.progressTrack}><View style={[styles.progressFill, { width: progress }]} /></View>
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
@@ -106,7 +113,7 @@ export function TutorialScreen({ user, onComplete, onSignOut }: Props) {
           <Text style={styles.nameHint}>You can take your time—this name is saved only after the tutorial.</Text>
         </View> : <TutorialPoints step={step} />}
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button label={step === lessons.length - 1 ? `Enter novo with ${mascotName.trim() || 'your mascot'}` : 'Continue'} onPress={next} loading={loading} disabled={step === 0 && !mascotName.trim()} icon={step === lessons.length - 1 ? 'sparkles' : 'arrow-forward'} />
+        <Button label={step === lessons.length - 1 ? `Finish with ${mascotName.trim() || 'your mascot'}` : 'Next'} onPress={next} loading={loading} disabled={step === 0 && !mascotName.trim()} icon={step === lessons.length - 1 ? 'sparkles' : 'arrow-forward'} />
       </ScrollView>
     </KeyboardAvoidingView>
   </SafeAreaView>;
@@ -134,8 +141,11 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   topbar: { minHeight: 64, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   roundButton: { width: 42, height: 42, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DDE5D9', alignItems: 'center', justifyContent: 'center' },
-  exit: { minHeight: 40, paddingHorizontal: 14, borderRadius: 99, backgroundColor: '#EFF3EC', justifyContent: 'center' },
-  exitText: { color: colors.inkMuted, fontSize: 13, fontWeight: '700' },
+  skip: { minWidth: 66, minHeight: 40, paddingHorizontal: 14, borderRadius: 99, backgroundColor: '#EFF3EC', alignItems: 'center', justifyContent: 'center' },
+  skipPressed: { opacity: 0.72 },
+  skipDisabled: { opacity: 0.45 },
+  skipText: { color: colors.forest, fontSize: 13, fontWeight: '800' },
+  topbarEndSpacer: { width: 66, height: 40 },
   step: { color: colors.inkMuted, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
   progressTrack: { height: 6, marginHorizontal: 20, borderRadius: 99, backgroundColor: '#E4EAE0', overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.limeBright },
