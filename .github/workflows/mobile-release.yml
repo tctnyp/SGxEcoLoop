@@ -168,8 +168,10 @@ jobs:
           # No Apple distribution identity or production signing credential is used.
           carrier_entitlements="$RUNNER_TEMP/novo-resign-entitlements.plist"
           plutil -create xml1 "$carrier_entitlements"
-          plutil -insert 'com.apple.developer.nfc.readersession.formats' -json '["TAG"]' "$carrier_entitlements"
-          /usr/bin/codesign --force --sign - --entitlements "$carrier_entitlements" --generate-entitlement-der "$app_path"
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.nfc.readersession.formats array' "$carrier_entitlements"
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.developer.nfc.readersession.formats:0 string TAG' "$carrier_entitlements"
+          /usr/bin/codesign --deep --force --sign - --entitlements "$carrier_entitlements" --generate-entitlement-der "$app_path"
+          /usr/bin/codesign --verify --deep --strict "$app_path"
           /usr/bin/codesign -d --entitlements :- "$app_path" > "$RUNNER_TEMP/novo-requested-entitlements.plist"
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$RUNNER_TEMP/novo-requested-entitlements.plist" | grep -Fq 'TAG'
           mkdir -p "$RUNNER_TEMP/ipa/Payload" release-assets
