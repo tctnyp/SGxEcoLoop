@@ -67,11 +67,11 @@ describe('novo API', () => {
     assert.equal(signedIn.status, 200);
   });
 
-  it('uses the Microsoft Graph user principal name when the mail field is empty', async () => {
+  it('uses a valid Microsoft user principal name when the mail field is empty', async () => {
     await createMember('microsoft-user@example.com', 'Microsoft User');
     process.env.MICROSOFT_CLIENT_ID = 'microsoft-test-client';
     process.env.MICROSOFT_CLIENT_SECRET = 'microsoft-test-secret';
-    process.env.MICROSOFT_TENANT_ID = 'common';
+    process.env.MICROSOFT_AUTHORITY_TENANT = 'common';
     const originalFetch = globalThis.fetch;
     try {
       const started = await request(app).get('/api/auth/microsoft/start?platform=web');
@@ -82,6 +82,7 @@ describe('novo API', () => {
         const url = String(input);
         if (url.includes('/oauth2/v2.0/token')) return new Response(JSON.stringify({ access_token: 'microsoft-access-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         if (url.includes('graph.microsoft.com/v1.0/me')) return new Response(JSON.stringify({ id: 'microsoft-subject', displayName: 'Microsoft User', mail: null, userPrincipalName: 'microsoft-user@example.com' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/oidc/userinfo')) return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
         return new Response('Not found', { status: 404 });
       };
       const callback = await request(app).get(`/api/auth/microsoft/callback?state=${encodeURIComponent(state)}&code=test-code`);
@@ -91,7 +92,71 @@ describe('novo API', () => {
       globalThis.fetch = originalFetch;
       delete process.env.MICROSOFT_CLIENT_ID;
       delete process.env.MICROSOFT_CLIENT_SECRET;
+      delete process.env.MICROSOFT_AUTHORITY_TENANT;
+    }
+  });
+
+  it('returns a personal Microsoft email instead of a tenant guest identifier', async () => {
+    process.env.MICROSOFT_CLIENT_ID = 'microsoft-test-client';
+    process.env.MICROSOFT_CLIENT_SECRET = 'microsoft-test-secret';
+    process.env.MICROSOFT_TENANT_ID = 'directory-that-must-not-be-used-as-the-authority';
+    const originalFetch = globalThis.fetch;
+    try {
+      const started = await request(app).get('/api/auth/microsoft/start?platform=mobile');
+      assert.equal(started.status, 302);
+      assert.match(started.headers.location, /login\.microsoftonline\.com\/common\/oauth2\/v2\.0\/authorize/);
+      const state = new URL(started.headers.location).searchParams.get('state');
+      assert.ok(state);
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.includes('/oauth2/v2.0/token')) return new Response(JSON.stringify({ access_token: 'personal-microsoft-access-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/v1.0/me')) return new Response(JSON.stringify({
+          id: 'personal-microsoft-subject',
+          displayName: 'Chee Tiong Tan',
+          mail: null,
+          userPrincipalName: 'alphatct3209_hotmail.com#EXT#@novo.onmicrosoft.com',
+          otherMails: [],
+          proxyAddresses: [],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/oidc/userinfo')) return new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response('Not found', { status: 404 });
+      };
+      const callback = await request(app).get(`/api/auth/microsoft/callback?state=${encodeURIComponent(state)}&code=test-code`);
+      assert.equal(callback.status, 302);
+      const destination = new URL(callback.headers.location);
+      assert.equal(destination.searchParams.get('oauthNew'), '1');
+      assert.equal(destination.searchParams.get('email'), 'alphatct3209@hotmail.com');
+      assert.doesNotMatch(destination.searchParams.get('email') ?? '', /onmicrosoft\.com$/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.MICROSOFT_CLIENT_ID;
+      delete process.env.MICROSOFT_CLIENT_SECRET;
       delete process.env.MICROSOFT_TENANT_ID;
+    }
+  });
+
+  it('uses Microsoft otherMails before an onmicrosoft.com principal', async () => {
+    process.env.MICROSOFT_CLIENT_ID = 'microsoft-test-client';
+    process.env.MICROSOFT_CLIENT_SECRET = 'microsoft-test-secret';
+    const originalFetch = globalThis.fetch;
+    try {
+      const started = await request(app).get('/api/auth/microsoft/start?platform=web');
+      const state = new URL(started.headers.location).searchParams.get('state');
+      assert.ok(state);
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        if (url.includes('/oauth2/v2.0/token')) return new Response(JSON.stringify({ access_token: 'other-mail-access-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/v1.0/me')) return new Response(JSON.stringify({ id: 'other-mail-subject', displayName: 'Personal User', mail: null, userPrincipalName: 'personal@novo.onmicrosoft.com', otherMails: ['personal@hotmail.com'], proxyAddresses: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('graph.microsoft.com/oidc/userinfo')) return new Response(JSON.stringify({ email: null }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return new Response('Not found', { status: 404 });
+      };
+      const callback = await request(app).get(`/api/auth/microsoft/callback?state=${encodeURIComponent(state)}&code=test-code`);
+      const destination = new URL(callback.headers.location);
+      assert.equal(destination.searchParams.get('email'), 'personal@hotmail.com');
+    } finally {
+      globalThis.fetch = originalFetch;
+      delete process.env.MICROSOFT_CLIENT_ID;
+      delete process.env.MICROSOFT_CLIENT_SECRET;
     }
   });
 

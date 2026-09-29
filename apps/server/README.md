@@ -13,7 +13,7 @@ Important configuration:
 - `NOVO_DB_PATH`: alternate SQLite location when the SQLite driver is selected.
 - `GOOGLE_*_CLIENT_ID` / `GOOGLE_CLIENT_IDS`: accepted Google ID-token audiences.
 - `GOOGLE_WEB_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DISCORD_CLIENT_ID`, and `DISCORD_CLIENT_SECRET`: Google and Discord web/mobile OAuth configuration.
-- `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and `MICROSOFT_TENANT_ID`: Microsoft OAuth configuration. The tenant defaults to `common`, which supports both work/school and personal Microsoft accounts when the app registration allows them.
+- `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, and optional `MICROSOFT_AUTHORITY_TENANT`: Microsoft OAuth configuration. The authority defaults to `common`, which supports work/school and personal Microsoft accounts and avoids exposing tenant guest UPNs as email addresses.
 - Register each provider callback as `${PUBLIC_APP_URL}/api/auth/<provider>/callback`. Microsoft must use the Web platform redirect, even for Android and iOS, because the server completes OAuth before returning to the novo app.
 - `PUBLIC_APP_URL`: public environment URL used for OAuth callbacks, password resets, and invite links.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USER`, `SMTP_PASSWORD`: password-reset mail transport. The VPS defaults to local SMTP on port 25.

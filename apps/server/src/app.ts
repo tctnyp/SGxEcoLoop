@@ -780,6 +780,44 @@ function oauthCredentials(provider: OAuthProvider) {
   return { clientId: process.env.MICROSOFT_CLIENT_ID, clientSecret: process.env.MICROSOFT_CLIENT_SECRET, label: 'Microsoft' };
 }
 
+function microsoftAuthorityTenant() {
+  return process.env.MICROSOFT_AUTHORITY_TENANT?.trim() || 'common';
+}
+
+function normalizeMicrosoftEmail(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const email = value.trim().toLowerCase();
+  if (!z.string().email().safeParse(email).success) return null;
+  const domain = email.split('@')[1];
+  if (!domain || domain === 'onmicrosoft.com' || domain.endsWith('.onmicrosoft.com')) return null;
+  return email;
+}
+
+function externalGuestEmail(userPrincipalName: string | null | undefined) {
+  const match = userPrincipalName?.trim().match(/^(.+)#EXT#@[^@]+\.onmicrosoft\.com$/i);
+  if (!match) return null;
+  const encodedEmail = match[1];
+  const separator = encodedEmail.lastIndexOf('_');
+  if (separator <= 0) return null;
+  return normalizeMicrosoftEmail(`${encodedEmail.slice(0, separator)}@${encodedEmail.slice(separator + 1)}`);
+}
+
+function microsoftProfileEmail(profile: {
+  mail?: string | null;
+  userPrincipalName?: string | null;
+  otherMails?: string[] | null;
+  proxyAddresses?: string[] | null;
+}, userInfo: { email?: string | null }) {
+  const primaryProxy = profile.proxyAddresses?.find((address) => address.startsWith('SMTP:'))?.slice(5);
+  const proxyAddresses = profile.proxyAddresses?.map((address) => address.replace(/^smtp:/i, '')) ?? [];
+  const candidates = [profile.mail, userInfo.email, ...(profile.otherMails ?? []), primaryProxy, ...proxyAddresses, profile.userPrincipalName];
+  for (const candidate of candidates) {
+    const email = normalizeMicrosoftEmail(candidate);
+    if (email) return email;
+  }
+  return externalGuestEmail(profile.userPrincipalName);
+}
+
 function oauthAuthorizationUrl(provider: OAuthProvider, state: string) {
   const { clientId } = oauthCredentials(provider);
   const parameters = new URLSearchParams({ client_id: clientId!, redirect_uri: oauthRedirectUri(provider), response_type: 'code', state });
@@ -794,7 +832,7 @@ function oauthAuthorizationUrl(provider: OAuthProvider, state: string) {
   }
   parameters.set('scope', 'openid profile email User.Read');
   parameters.set('prompt', 'select_account');
-  return `https://login.microsoftonline.com/${encodeURIComponent(process.env.MICROSOFT_TENANT_ID || 'common')}/oauth2/v2.0/authorize?${parameters}`;
+  return `https://login.microsoftonline.com/${encodeURIComponent(microsoftAuthorityTenant())}/oauth2/v2.0/authorize?${parameters}`;
 }
 
 function createOAuthAttempt(provider: OAuthProvider, platform: OAuthAttempt['platform'], linkUserId?: string) {
@@ -1017,15 +1055,24 @@ app.get('/api/auth/microsoft/callback', async (request, response) => {
   if (!attempt || attempt.provider !== 'microsoft' || attempt.expiresAt <= Date.now() || !code) return response.redirect(oauthFailure(attempt?.platform ?? 'web', 'Microsoft sign-in expired. Please try again.'));
   oauthAttempts.delete(state);
   try {
-    const tenant = process.env.MICROSOFT_TENANT_ID || 'common';
+    const tenant = microsoftAuthorityTenant();
     const tokenResponse = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/token`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: process.env.MICROSOFT_CLIENT_ID!, client_secret: process.env.MICROSOFT_CLIENT_SECRET!, redirect_uri: oauthRedirectUri('microsoft'), grant_type: 'authorization_code', scope: 'openid profile email User.Read' }) });
     if (!tokenResponse.ok) throw new Error('Microsoft did not accept the authorization code.');
     const token = await tokenResponse.json() as { access_token?: string };
     if (!token.access_token) throw new Error('Microsoft did not return an access token.');
-    const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName', { headers: { Authorization: `Bearer ${token.access_token}` } });
-    const profile = await profileResponse.json() as { id?: string; displayName?: string; mail?: string | null; userPrincipalName?: string | null };
-    const email = (profile.mail || profile.userPrincipalName || '').trim().toLowerCase();
-    if (!profileResponse.ok || !profile.id || !email.includes('@')) throw new Error('Microsoft did not return a usable email address.');
+    const authorization = { Authorization: `Bearer ${token.access_token}` };
+    const profileResponse = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName,otherMails,proxyAddresses', { headers: authorization });
+    const profile = await profileResponse.json() as { id?: string; displayName?: string; mail?: string | null; userPrincipalName?: string | null; otherMails?: string[] | null; proxyAddresses?: string[] | null };
+    let userInfo: { email?: string | null } = {};
+    try {
+      const userInfoResponse = await fetch('https://graph.microsoft.com/oidc/userinfo', { headers: authorization });
+      if (userInfoResponse.ok) userInfo = await userInfoResponse.json() as { email?: string | null };
+    } catch {
+      // Graph profile fields below remain valid when the optional OIDC endpoint is unavailable.
+    }
+    const email = microsoftProfileEmail(profile, userInfo);
+    if (!profileResponse.ok || !profile.id) throw new Error('Microsoft did not return a usable account profile.');
+    if (!email) throw new Error('Microsoft did not share a usable email address. Add an email to your Microsoft account, then try again.');
     await finishOAuth(response, attempt, { subject: profile.id, email, name: profile.displayName || email.split('@')[0] || 'Novo member' });
   } catch (error) {
     response.redirect(oauthFailure(attempt.platform, error instanceof Error ? error.message : 'Microsoft sign-in failed.'));
