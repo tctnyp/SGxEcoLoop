@@ -19,8 +19,6 @@ import {
   reserveWristbandPickup,
   redeemCoupon,
   getWristbandPickupLocations,
-  getPilotCapabilities,
-  usePilotWristbandBypass,
   revokeSession,
   restoreMobileSession,
   setAccountStatusListener,
@@ -275,8 +273,6 @@ function NovoApp() {
   };
 
   const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
-  const handleLoadPilotCapabilities = useCallback(() => getPilotCapabilities(requireToken()), []);
-  const handlePilotBypass = async () => usePilotWristbandBypass(requireToken());
   const handleLoadWristbandPickupLocations = useCallback((coordinates?: { latitude: number; longitude: number }) => getWristbandPickupLocations(requireToken(), coordinates), []);
   const handleReserveWristbandPickup = async (pickupLocation: string) => {
     const updated = await reserveWristbandPickup(requireToken(), pickupLocation);
@@ -401,7 +397,7 @@ function NovoApp() {
       {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
       {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => { setDraft(undefined); setScreen('onboarding'); }} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
-      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} loadPilotCapabilities={handleLoadPilotCapabilities} onPair={handlePairRequest} onPilotBypass={handlePilotBypass} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
+      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
       {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
       {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
       {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}

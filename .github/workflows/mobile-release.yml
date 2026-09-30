@@ -126,7 +126,9 @@ jobs:
 
       - name: Install CocoaPods
         working-directory: apps/mobile/ios
-        run: pod install --repo-update
+        run: |
+          pod install --repo-update
+          grep -Fq 'react-native-nfc-manager' Podfile.lock
 
       - name: Build unsigned iOS application
         run: |
@@ -156,6 +158,8 @@ jobs:
           bundle_path="$(find "$app_path" -name 'main.jsbundle' -type f -print -quit)"
           test -n "$bundle_path"
           grep -aFq "$EXPO_PUBLIC_API_URL" "$bundle_path"
+          usage_description="$(/usr/libexec/PlistBuddy -c 'Print :NFCReaderUsageDescription' "$app_path/Info.plist")"
+          test -n "$usage_description"
           entitlements_path="$(find apps/mobile/ios -name '*.entitlements' -type f -print -quit)"
           test -n "$entitlements_path"
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$entitlements_path" | grep -Fq 'TAG'

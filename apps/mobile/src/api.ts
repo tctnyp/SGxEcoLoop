@@ -217,15 +217,6 @@ export async function getWristbandPickupLocations(token: string, coordinates?: {
   return result.lockers;
 }
 
-export async function getPilotCapabilities(token: string) {
-  return request<{ wristbandBypass: boolean; dataClassification: string }>('/member/pilot-capabilities', undefined, token);
-}
-
-export async function usePilotWristbandBypass(token: string): Promise<User> {
-  const result = await request<{ user: User }>('/member/wristband/pilot-bypass', { method: 'POST' }, token);
-  return result.user;
-}
-
 export async function getFriends(token: string): Promise<Friend[]> {
   const result = await request<{ friends: Friend[] }>('/member/friends', undefined, token);
   return result.friends;

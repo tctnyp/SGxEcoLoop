@@ -95,6 +95,17 @@ For Google Play production, use the existing EAS `production` profile to create 
 
 Expo Go cannot load the NFC native module. Rebuild the APK whenever native dependencies or Expo config plugins change.
 
+### Physical iPhone NFC requirements
+
+novo reads wristbands on iPhone through `react-native-nfc-manager` and Core NFC's `NFCTagReaderSession`; it does not use the simulator pairing shortcut. A device installation can open the Apple NFC sheet only when all of the following are true:
+
+- The explicit App ID `com.novo.ecoloop` has **NFC Tag Reading** enabled in the Apple Developer portal.
+- The provisioning profile used for the final device signature contains `com.apple.developer.nfc.readersession.formats = [TAG]`.
+- The final signer preserves that entitlement. The ad-hoc entitlement carried by the unsigned GitHub IPA declares the capability but cannot grant it; iLoader or SideStore must re-sign with an eligible Apple profile.
+- The wristband contains an NDEF URI or text record in the form `novo://wristband/TOKEN` or `https://novo.tancheetiong.com/nfc/TOKEN`, where `TOKEN` is the value provisioned by Operations.
+
+A free or wildcard provisioning profile that cannot authorize NFC Tag Reading will install an app that cannot start a real Core NFC session. Expo Go and the iOS Simulator cannot test the NFC radio. Use a supported physical iPhone, keep it unlocked with novo in the foreground, press **Tap wristband to pair**, and hold the tag against the top edge near the camera until Apple's sheet confirms the read.
+
 If an installed build reports a missing native Expo module, uninstall the old APK and install a newly generated one. JavaScript bundling alone cannot add a native Android module to an existing binary.
 
 ## NFC lifecycle

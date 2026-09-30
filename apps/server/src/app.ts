@@ -1983,25 +1983,6 @@ app.get('/api/member/wristband/pickup-locations', async (request, response, next
   }
 });
 
-function pilotBypassAvailable(user: User) {
-  return process.env.NOVO_PILOT_BYPASS === '1' && (process.env.NOVO_PILOT_ALLOW_ANY === '1' || user.email.endsWith('@demo.novo.sg'));
-}
-
-app.get('/api/member/pilot-capabilities', (request, response) => {
-  const user = memberFromRequest(request);
-  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  response.json({ wristbandBypass: pilotBypassAvailable(user), dataClassification: process.env.NOVO_PILOT_DATA_CLASSIFICATION || 'internal-test' });
-});
-
-app.post('/api/member/wristband/pilot-bypass', (request, response) => {
-  const user = memberFromRequest(request);
-  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
-  if (!pilotBypassAvailable(user)) return response.status(403).json({ message: 'The wristband bypass is available only to explicitly enabled demo or pilot accounts.' });
-  user.wristbandPaired = true;
-  user.wristbandPickupLocation = 'Pilot demo bypass — no physical wristband';
-  response.json({ user, dataClassification: process.env.NOVO_PILOT_DATA_CLASSIFICATION || 'internal-test' });
-});
-
 app.delete('/api/member/account', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
