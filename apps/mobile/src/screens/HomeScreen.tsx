@@ -128,6 +128,11 @@ export function HomeScreen(props: Props) {
         setNfcStatus('error');
         setNfcMessage('That NFC tag is not a prepared novo wristband.');
       }
+    }, (reason) => {
+      if (!disposed) {
+        setNfcStatus('error');
+        setNfcMessage(reason.message);
+      }
     }).then((stop) => {
       if (disposed) void stop();
       else {

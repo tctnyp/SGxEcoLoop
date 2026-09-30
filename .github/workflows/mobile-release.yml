@@ -174,6 +174,10 @@ jobs:
           /usr/bin/codesign --verify --deep --strict "$app_path"
           /usr/bin/codesign -d --entitlements :- "$app_path" > "$RUNNER_TEMP/novo-requested-entitlements.plist"
           /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$RUNNER_TEMP/novo-requested-entitlements.plist" | grep -Fq 'TAG'
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.nfc.readersession.formats' "$RUNNER_TEMP/novo-requested-entitlements.plist" | grep -Fq 'NDEF'; then
+            echo 'The packaged app signature unexpectedly contains the deprecated NDEF entitlement.' >&2
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/ipa/Payload" release-assets
           cp -R "$app_path" "$RUNNER_TEMP/ipa/Payload/"
           (
@@ -244,7 +248,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release_tag.outputs.tag }}
         run: |
           set -euo pipefail
-          notes="Four device builds from ${GITHUB_SHA}: development routes to https://novodev.tancheetiong.com/api; production routes to https://novo.tancheetiong.com/api. Android uses the generated local install signature. The IPA files contain only an ad-hoc Core NFC entitlement carrier and still require iLoader or SideStore to re-sign them; no Apple distribution identity is used."
+          notes="Four device builds from ${GITHUB_SHA}: development routes to https://novodev.tancheetiong.com/api; production routes to https://novo.tancheetiong.com/api. Android uses the generated local install signature. The IPA files contain only an ad-hoc Core NFC TAG entitlement carrier and still require iLoader or SideStore to re-sign them; no Apple distribution identity is used. The final Apple provisioning profile must authorize Near Field Communication Tag Reading—signers that strip or cannot grant that capability cannot enable NFC."
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
           else

@@ -25,6 +25,11 @@ function tokenFromTag(tag: TagEvent | null) {
 }
 
 async function prepareNfc() {
+  // TAG is Apple's current Core NFC entitlement. On iOS, NfcManager.start()
+  // probes NFCNDEFReaderSession instead of the TAG-backed NFCTagReaderSession,
+  // which can incorrectly report an entitled installation as unsupported.
+  // requestTechnology(Ndef) below opens NFCTagReaderSession and is sufficient.
+  if (Platform.OS === 'ios') return;
   try {
     await NfcManager.start();
   } catch (error) {
@@ -32,12 +37,9 @@ async function prepareNfc() {
   }
   const supported = await NfcManager.isSupported().catch(() => false);
   if (!supported) {
-    if (Platform.OS === 'ios') {
-      throw new NfcUnavailableError('Core NFC is unavailable to this installed copy of novo. Reinstall the latest IPA and ensure your signer keeps the NFC Tag Reading entitlement.');
-    }
     throw new NfcUnavailableError('This phone does not support NFC tag reading.');
   }
-  if (Platform.OS === 'android' && !(await NfcManager.isEnabled())) {
+  if (!(await NfcManager.isEnabled())) {
     throw new NfcUnavailableError('Turn on NFC in your phone settings to tap your novo wristband.');
   }
 }
@@ -45,7 +47,7 @@ async function prepareNfc() {
 function normalizeNfcError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (/entitlement|missing required entitlement|security violation/i.test(message)) {
-    return new NfcUnavailableError('This installed copy cannot access Core NFC. Reinstall the latest novo IPA with a signer that preserves the NFC Tag Reading entitlement.');
+    return new NfcUnavailableError("This installed copy cannot access Core NFC. Re-sign novo with an Apple provisioning profile that includes Near Field Communication Tag Reading.");
   }
   if (/not support|unsupported|readingavailable/i.test(message)) {
     return Platform.OS === 'ios'
@@ -55,8 +57,40 @@ function normalizeNfcError(error: unknown) {
   return error instanceof Error ? error : new Error('NFC could not start. Try again with novo open and your phone unlocked.');
 }
 
-export async function startNovoWristbandListener(onToken: (token: string) => void, onInvalidTag?: () => void) {
+export async function startNovoWristbandListener(
+  onToken: (token: string) => void,
+  onInvalidTag?: () => void,
+  onError?: (error: Error) => void,
+) {
   await prepareNfc();
+
+  if (Platform.OS === 'ios') {
+    let active = true;
+    const reader = (async () => {
+      try {
+        // requestTechnology uses NFCTagReaderSession on iOS, which matches the
+        // modern TAG entitlement while still returning the NDEF message.
+        await NfcManager.requestTechnology(NfcTech.Ndef, {
+          alertMessage: 'Bring your novo wristband near the top of your iPhone.',
+        });
+        if (!active) return;
+        const token = tokenFromTag(await NfcManager.getTag());
+        if (token) onToken(token);
+        else onInvalidTag?.();
+      } catch (error) {
+        if (active) onError?.(normalizeNfcError(error));
+      } finally {
+        await NfcManager.cancelTechnologyRequest().catch(() => undefined);
+      }
+    })();
+
+    return async () => {
+      active = false;
+      await NfcManager.cancelTechnologyRequest().catch(() => undefined);
+      await reader.catch(() => undefined);
+    };
+  }
+
   let active = true;
   let lastToken = '';
   let lastReadAt = 0;

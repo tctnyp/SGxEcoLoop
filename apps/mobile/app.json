@@ -3,7 +3,7 @@
     "name": "novo",
     "slug": "novo",
     "scheme": "novo",
-    "version": "1.1.20",
+    "version": "1.2.1",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -15,9 +15,14 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "28",
+      "buildNumber": "29",
       "icon": "./assets/icon.png",
       "bundleIdentifier": "com.novo.ecoloop",
+      "entitlements": {
+        "com.apple.developer.nfc.readersession.formats": [
+          "TAG"
+        ]
+      },
       "associatedDomains": [
         "applinks:novo.tancheetiong.com",
         "applinks:novodev.tancheetiong.com"
@@ -25,7 +30,7 @@
     },
     "android": {
       "package": "com.novo.ecoloop",
-      "versionCode": 28,
+      "versionCode": 29,
       "permissions": [
         "android.permission.NFC",
         "android.permission.CAMERA",
