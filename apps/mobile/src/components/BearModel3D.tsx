@@ -168,7 +168,7 @@ export function MascotModel3D({ mascotType, accessories, manualRotationX = 0, ma
 export function MascotWorld({ mascotType, accessories, manualRotationX, manualRotationY, isInteracting, autoRotate }: { mascotType: MascotType; accessories: AccessoryId[]; manualRotationX?: number; manualRotationY?: number; isInteracting?: boolean; autoRotate?: boolean }) {
   const animationEnabled = autoRotate ?? true;
   return <>
-    <BearFrameDriver active={Boolean(animationEnabled || isInteracting)} />
+    <BearFrameDriver active={Boolean(animationEnabled || isInteracting)} interactive={Boolean(isInteracting)} />
     <hemisphereLight args={['#FFF8EC', '#9EB6AA', 1.35]} />
     <directionalLight position={[3.6, 5.4, 5.2]} intensity={2.45} color="#FFF7E2" />
     <directionalLight position={[-4.2, 1.5, 2.8]} intensity={1.05} color="#CCE0FF" />
@@ -177,13 +177,15 @@ export function MascotWorld({ mascotType, accessories, manualRotationX, manualRo
   </>;
 }
 
-function BearFrameDriver({ active }: { active: boolean }) {
+function BearFrameDriver({ active, interactive }: { active: boolean; interactive: boolean }) {
   const invalidate = useThree((state) => state.invalidate);
   useEffect(() => {
     invalidate();
     if (!active) return undefined;
-    const interval = setInterval(invalidate, 1000 / 60);
+    // Idle rotation is intentionally slow; 30 fps keeps it smooth while
+    // cutting continuous GPU work. Dragging returns to full responsiveness.
+    const interval = setInterval(invalidate, 1000 / (interactive ? 60 : 30));
     return () => clearInterval(interval);
-  }, [active, invalidate]);
+  }, [active, interactive, invalidate]);
   return null;
 }

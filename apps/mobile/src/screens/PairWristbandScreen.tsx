@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
@@ -24,6 +24,8 @@ type Props = {
 type PairState = 'ready' | 'scanning' | 'success' | 'error';
 
 export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabilities, onPair, onPilotBypass, onReserve, onPaired, onSignOut }: Props) {
+  const { height } = useWindowDimensions();
+  const compact = height < 740;
   const [mode, setMode] = useState<'pair' | 'collect'>('pair');
   const [state, setState] = useState<PairState>('ready');
   const [error, setError] = useState('');
@@ -31,15 +33,20 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
   const [pickup, setPickup] = useState(user.wristbandPickupLocation ?? '');
   const [query, setQuery] = useState('');
   const [showLocations, setShowLocations] = useState(false);
+  const [loadingLocations, setLoadingLocations] = useState(false);
   const [savingPickup, setSavingPickup] = useState(false);
+  const [pickupConfirmed, setPickupConfirmed] = useState(Boolean(user.wristbandPickupLocation));
   const [pairedUser, setPairedUser] = useState<User | null>(null);
   const [pilotBypass, setPilotBypass] = useState(false);
   const pulse = useRef(new Animated.Value(0)).current;
   const guide = useRef(new Animated.Value(0)).current;
+  const locationsLoaded = useRef(false);
 
   useEffect(() => {
+    if (mode !== 'collect' || locationsLoaded.current) return undefined;
     let active = true;
     const load = async () => {
+      setLoadingLocations(true);
       let coordinates: { latitude: number; longitude: number } | undefined;
       try {
         const permission = await Location.requestForegroundPermissionsAsync();
@@ -52,14 +59,19 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
       }
       try {
         const nextLocations = await loadPickupLocations(coordinates);
-        if (active) setLocations(nextLocations);
+        if (active) {
+          setLocations(nextLocations);
+          locationsLoaded.current = true;
+        }
       } catch {
         if (active) setLocations([]);
+      } finally {
+        if (active) setLoadingLocations(false);
       }
     };
     void load();
     return () => { active = false; };
-  }, [loadPickupLocations]);
+  }, [loadPickupLocations, mode]);
   useEffect(() => { loadPilotCapabilities().then((result) => setPilotBypass(result.wristbandBypass)).catch(() => setPilotBypass(false)); }, [loadPilotCapabilities]);
   useEffect(() => {
     if (state !== 'scanning') return;
@@ -105,6 +117,7 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
     setSavingPickup(true); setError('');
     try {
       await onReserve(pickup);
+      setPickupConfirmed(true);
       setMode('pair');
       setShowLocations(false);
     } catch (reason) {
@@ -127,16 +140,16 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
   };
 
   return <SafeAreaView style={styles.safe}><View style={styles.page}>
-    <View style={styles.topbar}><Logo compact/><Pressable onPress={onSignOut} style={styles.exit}><Text style={styles.exitText}>Sign out</Text></Pressable></View>
-    <View style={styles.progress}><View style={styles.progressDone}/></View>
+    <View style={styles.topbar}><Logo compact/><View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}><Text style={{ color: colors.inkMuted, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 }}>WRISTBAND · 2 OF 3</Text><Pressable onPress={onSignOut} style={styles.exit}><Text style={styles.exitText}>Sign out</Text></Pressable></View></View>
+    <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 3, now: 2, text: 'Wristband setup, step 2 of 3' }} style={styles.progress}><View style={[styles.progressDone, { width: '66.667%' }]}/></View>
     <View style={styles.copy}><Text style={styles.eyebrow}>{mode === 'pair' ? 'TAP · PAIR · MEET' : 'CHOOSE · COLLECT · RETURN'}</Text><Text style={styles.title}>{state === 'success' ? 'Wristband paired!' : mode === 'pair' ? 'Pair your wristband' : 'Choose a collection point'}</Text><Text style={styles.subtitle}>{state === 'success' ? `Your ${pairedUser?.wristbandColor.replace('-', ' ') ?? 'novo'} wristband revealed a ${pairedUser?.mascotType.replace('-', ' ') ?? 'new animal'} companion. Next, give your mascot a name.` : mode === 'pair' ? 'Already have your wristband? Tap it to this phone. Pairing is required before you can enter novo.' : 'Reserve a convenient Pick! Locker or POPStation, collect your wristband, then return here to pair it.'}</Text></View>
     {mode === 'pair' ? <>
-      <View style={styles.nfcGuideStage}><View style={styles.detectionBeam} /><Animated.View style={[styles.guideWristband, { opacity: guide.interpolate({ inputRange: [0, .12, .9, 1], outputRange: [.65, 1, 1, .75] }), transform: [{ translateX: guide.interpolate({ inputRange: [0, 1], outputRange: [-124, 18] }) }, { rotate: '-9deg' }] }]}><View style={styles.guideStrap} /><View style={styles.guideModule}><Ionicons name="leaf" size={18} color={colors.forest} /></View></Animated.View><View style={styles.phoneMock}><View style={styles.phoneSpeaker} /><Animated.View style={[styles.nfcGuideFace, state === 'scanning' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) }] }, state === 'success' && styles.successFace]}><Ionicons name={state === 'success' ? 'checkmark' : 'radio-outline'} size={28} color={colors.forest}/></Animated.View><View style={styles.phoneHome} /></View><Text style={styles.guideCaption}>Move the wristband behind the top of your phone</Text></View>
-      {state !== 'success' && <View style={styles.optionSummary}><View style={styles.optionIcon}><Ionicons name="radio-outline" size={21} color={colors.forest}/></View><View style={{flex:1}}><Text style={styles.optionTitle}>I have a wristband</Text><Text style={styles.optionText}>Keep it near the top of your phone while novo reads its NFC tag.</Text></View></View>}
+      <View style={[styles.nfcGuideStage, compact && { height: 158 }]}><View style={styles.detectionBeam} /><Animated.View style={[styles.guideWristband, { opacity: guide.interpolate({ inputRange: [0, .12, .9, 1], outputRange: [.65, 1, 1, .75] }), transform: [{ translateX: guide.interpolate({ inputRange: [0, 1], outputRange: [-124, 18] }) }, { rotate: '-9deg' }] }]}><View style={styles.guideStrap} /><View style={styles.guideModule}><Ionicons name="leaf" size={18} color={colors.forest} /></View></Animated.View><View style={styles.phoneMock}><View style={styles.phoneSpeaker} /><Animated.View style={[styles.nfcGuideFace, state === 'scanning' && { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.92, 1.12] }) }] }, state === 'success' && styles.successFace]}><Ionicons name={state === 'success' ? 'checkmark' : 'radio-outline'} size={28} color={colors.forest}/></Animated.View><View style={styles.phoneHome} /></View><Text style={styles.guideCaption}>Move the wristband behind the top of your phone</Text></View>
+      {state !== 'success' && <View style={styles.optionSummary}><View style={styles.optionIcon}><Ionicons name="radio-outline" size={21} color={colors.forest}/></View><View style={{flex:1}}><Text style={styles.optionTitle}>I have a wristband</Text><Text style={styles.optionText}>Keep it near the top of your phone while novo reads its NFC tag.</Text>{pickupConfirmed && pickup ? <Text numberOfLines={1} style={{ color: colors.forest, fontSize: 10, lineHeight: 14, fontWeight: '800', marginTop: 4 }}>Reserved · {pickup}</Text> : null}</View></View>}
       {state === 'success' && <View style={styles.successSummary}><Ionicons name="checkmark-circle" size={25} color={colors.forest}/><View style={{flex:1}}><Text style={styles.optionTitle}>Pairing complete</Text><Text style={styles.optionText}>This wristband is now securely linked to your novo ID. Continue to reveal and name your mascot.</Text></View></View>}
     </> : <View style={styles.collectionPage}>
       <View style={styles.collectionHero}><Ionicons name="cube-outline" size={30} color={colors.forest}/><View style={{flex:1}}><Text style={styles.optionTitle}>I need a wristband</Text><Text style={styles.optionText}>Your selected point is saved to your account. It does not unlock the app until the wristband is paired.</Text></View></View>
-      <View style={styles.pickupBlock}><Text style={styles.pickupLabel}>Wristband collection point</Text><Pressable style={styles.pickupButton} onPress={() => setShowLocations((value) => !value)}><Ionicons name="location-outline" size={19} color={colors.forest}/><Text numberOfLines={2} style={[styles.pickupText,!pickup && styles.placeholder]}>{pickup || 'Choose Pick! or POPStation'}</Text><Ionicons name={showLocations ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted}/></Pressable>{showLocations && <View style={styles.locationMenu}><View style={styles.search}><Ionicons name="search" size={17} color={colors.inkMuted}/><TextInput value={query} onChangeText={setQuery} placeholder="Search name, address or postal code" style={styles.searchInput}/></View><ScrollView style={styles.locationList} keyboardShouldPersistTaps="handled">{shown.map((location) => <Pressable key={location.id} style={styles.locationRow} onPress={() => { setPickup(`${location.name} · ${location.address}`); setShowLocations(false); }}><View style={{flex:1}}><Text style={styles.locationName}>{location.name}</Text><Text style={styles.locationAddress}>{location.address}</Text></View><View style={styles.locationMeta}><Text style={styles.provider}>{location.kind === 'pick-locker' ? 'PICK!' : 'POP'}</Text>{typeof location.distanceKm === 'number' && <Text style={styles.distance}>{location.distanceKm < 1 ? `${Math.round(location.distanceKm * 1000)} m` : `${location.distanceKm.toFixed(1)} km`}</Text>}</View></Pressable>)}{!shown.length && <Text style={styles.emptyLocations}>No matching collection point. Try a postal code or neighbourhood.</Text>}</ScrollView></View>}</View>
+      <View style={styles.pickupBlock}><Text style={styles.pickupLabel}>Wristband collection point</Text><Pressable style={styles.pickupButton} onPress={() => setShowLocations((value) => !value)}><Ionicons name="location-outline" size={19} color={colors.forest}/><Text numberOfLines={2} style={[styles.pickupText,!pickup && styles.placeholder]}>{pickup || 'Choose Pick! or POPStation'}</Text><Ionicons name={showLocations ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted}/></Pressable>{showLocations && <View style={styles.locationMenu}><View style={styles.search}><Ionicons name="search" size={17} color={colors.inkMuted}/><TextInput value={query} onChangeText={setQuery} placeholder="Search name, address or postal code" style={styles.searchInput}/></View><ScrollView style={styles.locationList} keyboardShouldPersistTaps="handled">{loadingLocations ? <View style={{ minHeight: 90, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.forest}/><Text style={styles.emptyLocations}>Loading collection points…</Text></View> : shown.map((location) => <Pressable key={location.id} style={styles.locationRow} onPress={() => { setPickup(`${location.name} · ${location.address}`); setPickupConfirmed(false); setShowLocations(false); }}><View style={{flex:1}}><Text style={styles.locationName}>{location.name}</Text><Text style={styles.locationAddress}>{location.address}</Text></View><View style={styles.locationMeta}><Text style={styles.provider}>{location.kind === 'pick-locker' ? 'PICK!' : 'POP'}</Text>{typeof location.distanceKm === 'number' && <Text style={styles.distance}>{location.distanceKm < 1 ? `${Math.round(location.distanceKm * 1000)} m` : `${location.distanceKm.toFixed(1)} km`}</Text>}</View></Pressable>)}{!loadingLocations && !shown.length && <Text style={styles.emptyLocations}>No matching collection point. Try a postal code or neighbourhood.</Text>}</ScrollView></View>}</View>
     </View>}
     <View style={styles.footer}>{error ? <Text style={styles.error}>{error}</Text> : null}{mode === 'pair' ? state === 'success' ? <Button label="Meet my mascot" icon="sparkles" onPress={() => pairedUser && onPaired(pairedUser)}/> : <>{Platform.OS === 'web' && <Text style={styles.webNotice}>Install the Android or iOS app to pair the NFC wristband.</Text>}<Button label={state === 'scanning' ? 'Waiting for wristband…' : Platform.OS === 'web' ? 'NFC needs the installed app' : 'Tap wristband to pair'} icon="radio" onPress={startPairing} loading={state === 'scanning'} disabled={Platform.OS === 'web'}/><Pressable onPress={() => { setMode('collect'); setError(''); }} style={styles.secondaryAction}><Ionicons name="location-outline" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>I don’t have a wristband</Text><Ionicons name="chevron-forward" size={17} color={colors.forest}/></Pressable>{pilotBypass && <Pressable onPress={() => void continueAsPilot()} style={styles.pilotAction}><Ionicons name="flask-outline" size={17} color={colors.purple}/><Text style={styles.pilotActionText}>Demo/pilot: continue without hardware</Text></Pressable>}<Text style={styles.help}>You cannot continue to Home until a prepared novo wristband is paired. Pilot bypasses are explicitly labelled test data.</Text></> : <><Button label={savingPickup ? 'Saving collection point…' : 'Save collection point'} icon="location" onPress={reservePickup} loading={savingPickup} disabled={!pickup || savingPickup}/><Pressable onPress={() => { setMode('pair'); setError(''); }} style={styles.secondaryAction}><Ionicons name="arrow-back" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>Back to wristband pairing</Text></Pressable><Text style={styles.help}>After collection, reopen novo and pair the wristband to meet your animal mascot.</Text></>}</View>
   </View></SafeAreaView>;

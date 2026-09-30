@@ -30,10 +30,12 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const [heroCopyFrame, setHeroCopyFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [plushieFrame, setPlushieFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState<'email' | 'password' | OAuthProvider | 'reset' | null>(null);
   const [providers, setProviders] = useState<Record<OAuthProvider, boolean>>({ google: true, discord: true, microsoft: false });
   const captureFrame = (setter: typeof setHeroCopyFrame) => (event: LayoutChangeEvent) => setter(event.nativeEvent.layout);
-  const constrained = !wide && (keyboardVisible || height < 620);
+  const tinyViewport = !wide && height < 620;
+  const constrained = !wide && (keyboardVisible || tinyViewport);
   const compactPlushieScale = constrained ? 0.5 : short ? 0.58 : 0.72;
   const visiblePlushieFrame = {
     x: plushieFrame.x + plushieFrame.width * (1 - compactPlushieScale) / 2,
@@ -65,6 +67,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   }, [width, height, constrained]);
 
   const handleEmail = async () => {
+    if (loading) return;
     const normalizedEmail = (email ?? '').trim();
     if (!normalizedEmail.includes('@')) return setError('Enter a valid email address.');
     setError('');
@@ -72,7 +75,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
     try {
       const { exists } = await checkEmailStatus(normalizedEmail);
       if (exists) setStep('password');
-      else await onAuthenticated(await signIn(normalizedEmail, 'continue'));
+      else await onAuthenticated({ isNewUser: true, draft: { name: '', email: normalizedEmail.toLowerCase() } });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'We could not check that email.');
     } finally {
@@ -81,6 +84,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   };
 
   const handleSignIn = async () => {
+    if (loading) return;
     const normalizedEmail = (email ?? '').trim();
     const normalizedPassword = password ?? '';
     if (normalizedPassword.length < 6) return setError('Password must be at least 6 characters.');
@@ -96,6 +100,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   };
 
   const handleOAuthProvider = async (provider: OAuthProvider) => {
+    if (loading) return;
     setError('');
     setLoading(provider);
     try {
@@ -112,8 +117,9 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
         return;
       }
       const oauthEmail = url.searchParams.get('email');
-      if (url.searchParams.has('oauthNew') && oauthEmail) {
-        await onAuthenticated({ isNewUser: true, draft: { email: oauthEmail, name: url.searchParams.get('name') ?? '' } });
+      const oauthOnboardingToken = url.searchParams.get('onboardingToken');
+      if (url.searchParams.has('oauthNew') && oauthEmail && oauthOnboardingToken) {
+        await onAuthenticated({ isNewUser: true, draft: { email: oauthEmail, name: url.searchParams.get('name') ?? '', oauthProvider: provider, oauthOnboardingToken } });
         return;
       }
       throw new Error(`${label} did not return a novo session.`);
@@ -129,13 +135,15 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const handleMicrosoft = () => handleOAuthProvider('microsoft');
 
   const handlePasswordReset = async () => {
+    if (loading) return;
     const normalizedEmail = (email ?? '').trim();
     if (!normalizedEmail.includes('@')) return setError('Enter a valid email address.');
     setError('');
+    setNotice('');
     setLoading('reset');
     try {
       const result = await requestPasswordReset(normalizedEmail);
-      setError(result.message);
+      setNotice(result.message);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'We could not send the reset email.');
     } finally {
@@ -147,7 +155,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <View style={[styles.page, wide ? styles.pageWide : styles.pageCompact]}>
-          <View style={[styles.hero, wide ? styles.heroWide : styles.heroCompact, short && styles.heroCompactShort, constrained && styles.heroCompactKeyboard]}>
+          <View style={[styles.hero, wide ? styles.heroWide : styles.heroCompact, short && styles.heroCompactShort, constrained && styles.heroCompactKeyboard, tinyViewport && !keyboardVisible && styles.heroCompactTiny]}>
             <View style={styles.heroTop}>
               <Logo inverse compact={!wide} />
               <View style={styles.pill}><Text style={styles.pillText}>small habits · real change</Text></View>
@@ -166,20 +174,20 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
             <Text style={[styles.heroFooter, wide && styles.heroFooterWide, short && styles.heroFooterShort]}>novo means “renew” — and every day is a fresh start.</Text>
           </View>
 
-          <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard]}>
+          <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard, tinyViewport && !keyboardVisible && styles.panelCompactTiny]}>
             <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
               <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
               <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
             </View>
 
             <View style={styles.form}>
-              {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
+              {recovering ? <><TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); setNotice(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handlePasswordReset()}/>{notice ? <View accessibilityLiveRegion="polite" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}<Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); setNotice(''); }}/></> : step === 'email' ? <>
                 <><View style={[styles.socialButtons, constrained && styles.socialButtonsKeyboard]}>
-                  {providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/>}
-                  {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/>}
-                  {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'}/>}
+                  {providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={loading !== null}/>}
+                  {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'} disabled={loading !== null}/>}
+                  {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'} disabled={loading !== null}/>}
                 </View><View style={[styles.divider, constrained && styles.dividerKeyboard]}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>
-                <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
+                <TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handleEmail()} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
                 <View style={[styles.signupRow, constrained && styles.signupRowKeyboard]}>
                   <Text style={styles.accountText}>New to novo?</Text>
@@ -190,12 +198,12 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
                   <View style={styles.emailSummaryCopy}><Text style={styles.emailSummaryLabel}>Signing in as</Text><Text numberOfLines={1} style={styles.emailSummaryValue}>{email.trim()}</Text></View>
                   <Text style={styles.changeEmail}>Change</Text>
                 </Pressable>
-                <TextField label="Password" value={password} onChangeText={setPassword} secure placeholder="At least 6 characters" icon="lock-closed-outline" error={error || undefined} />
+                <TextField label="Password" value={password} onChangeText={(value) => { setPassword(value); setError(''); }} secure placeholder="At least 6 characters" icon="lock-closed-outline" error={error || undefined} returnKeyType="done" onSubmitEditing={() => void handleSignIn()} />
                 <Pressable onPress={() => { setRecovering(true); setError(''); }}><Text style={styles.forgot}>Forgot password?</Text></Pressable>
                 <Button label="Sign in" onPress={handleSignIn} loading={loading === 'password'} />
               </>}
             </View>
-            {(!constrained || wide) && <Text style={[styles.terms, wide ? styles.termsWide : styles.termsCompact]}>By continuing, you agree to our Terms and Privacy Policy.</Text>}
+            {(!keyboardVisible || wide) && <Text style={[styles.terms, wide ? styles.termsWide : styles.termsCompact]}>By continuing, you agree to our Terms and Privacy Policy.</Text>}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -213,6 +221,7 @@ const styles = StyleSheet.create({
   heroCompact: { maxWidth: 560, height: '49%', minHeight: 300, paddingHorizontal: 22, paddingTop: 18, paddingBottom: 34 },
   heroCompactShort: { height: '43%', minHeight: 270, paddingTop: 12, paddingBottom: 24 },
   heroCompactKeyboard: { height: '36%', minHeight: 184, paddingTop: 10, paddingBottom: 10 },
+  heroCompactTiny: { height: '34%', minHeight: 166 },
   heroWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopLeftRadius: 32, borderBottomLeftRadius: 32, padding: 42 },
   heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   pill: { backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 99 },
@@ -245,6 +254,7 @@ const styles = StyleSheet.create({
   panelCompact: { flex: 1, maxWidth: 560, marginTop: -22, paddingHorizontal: 24, paddingTop: 24, paddingBottom: 42, borderTopLeftRadius: 34, borderTopRightRadius: 34, zIndex: 3 },
   panelCompactShort: { paddingTop: 14, paddingBottom: 36 },
   panelCompactKeyboard: { paddingTop: 12, paddingBottom: 12 },
+  panelCompactTiny: { paddingTop: 10, paddingBottom: 38 },
   panelWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopRightRadius: 32, borderBottomRightRadius: 32, paddingHorizontal: 70, justifyContent: 'center', shadowColor: colors.shadow, shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.08, shadowRadius: 30, elevation: 4 },
   formHeader: { marginBottom: 22 },
   formHeaderKeyboard: { marginBottom: 12 },
@@ -266,6 +276,8 @@ const styles = StyleSheet.create({
   emailSummaryLabel: { color: colors.inkMuted, fontSize: 11, lineHeight: 14, fontWeight: '600' },
   emailSummaryValue: { color: colors.ink, fontSize: 15, lineHeight: 20, fontWeight: '800', marginTop: 1 },
   changeEmail: { color: colors.forest, fontSize: 13, fontWeight: '800' },
+  notice: { minHeight: 44, borderRadius: 15, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#E5F4D3', justifyContent: 'center' },
+  noticeText: { color: colors.forest, fontSize: 13, lineHeight: 18, fontWeight: '700' },
   terms: { color: colors.inkMuted, fontSize: 11, lineHeight: 15, textAlign: 'center' },
   termsCompact: { position: 'absolute', left: 24, right: 24, bottom: 14 },
   termsWide: { marginTop: 18 },

@@ -52,7 +52,7 @@ type WasteAction = 'reduced' | 'repurposed' | 'recycled';
 type ReviewMode = 'ai' | 'staff';
 type ImpactTotals = { divertedKg: number; plasticKg: number; foodKg: number; otherKg: number; foodCo2eKg: number; approvedActions: number };
 type QuestImpact = { wasteStream: WasteStream; action: WasteAction; calibrationKey: string | null; itemCount: number; reviewMode: ReviewMode };
-type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; impact?: QuestImpact; lesson?: { title: string; summary: string; question: string; options: string[] } };
+type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; sourceAccessoryId?: AccessoryId; impact?: QuestImpact; lesson?: { title: string; summary: string; question: string; options: string[] } };
 type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
@@ -79,6 +79,7 @@ type PortalEvent = {
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: AccountStatus };
 type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
 type WeeklyEntry = { id: string; weekId: string; userId: string; startedAt: string; completedAt: string | null; elapsedMs: number | null; pointsAwarded: number; correct: boolean };
+type TaskTemplate = { id: string; title: string; description: string; points: number; kind: 'photo' | 'video-quiz'; accessoryId: AccessoryId | null; active: boolean; impact?: QuestImpact; lesson?: DailyQuest['lesson'] };
 type AiDetection = { label: string; confidence: number; box?: { x1: number; y1: number; x2: number; y2: number } };
 type Submission = {
   id: string;
@@ -107,10 +108,17 @@ type Submission = {
   estimatedWeightKg: number | null;
   impactSource: 'measured' | 'calibrated' | 'unavailable' | null;
   impactApplied: boolean;
+  reviewNote?: string | null;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
 };
 function memberSubmission(submission: Submission) {
   const { photoDataUrl: _photoDataUrl, ...summary } = submission;
   return summary;
+}
+function portalSubmissionSummary(submission: Submission) {
+  const { photoDataUrl: _photoDataUrl, photoEmbedding: _photoEmbedding, ...summary } = submission;
+  return { ...summary, hasPhoto: Boolean(submission.photoDataUrl) };
 }
 type FulfillmentOrder = { id: string; userId: string; accessoryId: AccessoryId; lockerLocation: string; points: number; status: 'confirmed' | 'tagged' | 'dispatched' | 'delivered' | 'cancelled'; createdAt: string };
 type Donation = { id: string; userId: string; causeId: string; causeName: string; points: number; createdAt: string };
@@ -123,6 +131,7 @@ type MobileHandoff = { token: string; userId: string; expiresAt: number; consume
 type Credential = { email: string; salt: string; passwordHash: string };
 type PasswordReset = { token: string; email: string; expiresAt: number; used: boolean };
 type OAuthAttempt = { provider: OAuthProvider; platform: 'web' | 'mobile'; expiresAt: number; linkUserId?: string };
+type OAuthOnboarding = { provider: OAuthProvider; subject: string; email: string; name: string; expiresAt: number };
 
 const portalEvents = new Map<string, PortalEvent>();
 const portalAccounts = new Map<string, PortalAccount>();
@@ -137,6 +146,7 @@ const nfcTags = new Map<string, NfcTag>();
 const accessoryQrTags = new Map<string, AccessoryQrTag>();
 const credentials = new Map<string, Credential>();
 const weeklyEntries = new Map<string, WeeklyEntry>();
+const taskTemplates = new Map<string, TaskTemplate>();
 const passwordResets = new Map<string, PasswordReset>();
 const recycleRightLocations = new Map<string, LockerLocation>();
 const pickLockerLocations = new Map<string, LockerLocation>();
@@ -158,6 +168,7 @@ const persistedCollections = {
   mobileHandoffs,
   credentials,
   weeklyEntries,
+  taskTemplates,
   passwordResets,
   weightCalibrations,
 } as unknown as PersistedCollections;
@@ -171,6 +182,7 @@ const locationCollections = {
 const databaseCollections = { ...persistedCollections, ...locationCollections };
 
 const oauthAttempts = new Map<string, OAuthAttempt>();
+const oauthOnboardingTokens = new Map<string, OAuthOnboarding>();
 
 const FOOD_CO2E_FACTOR = {
   kgCo2ePerKg: 3.59,
@@ -371,6 +383,10 @@ function coordinatesForSingaporeLocation(location: string) {
 const databaseReady = initializeDatabase(databaseCollections).then(async () => {
   let changed = false;
   const now = Date.now();
+  if (taskTemplates.size === 0) {
+    for (const template of defaultTaskTemplates) taskTemplates.set(template.id, template);
+    changed = true;
+  }
   for (const account of portalAccounts.values()) {
     const legacyStatus = (account as unknown as { status?: string }).status;
     if (legacyStatus === 'review' || legacyStatus === 'needs_review') {
@@ -448,6 +464,9 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
     if (submission.impactApplied === undefined) { submission.impactApplied = false; changed = true; }
     const owner = findUser(submission.userId);
     if (owner && applySubmissionImpact(owner, submission)) changed = true;
+    submission.reviewNote ??= null;
+    submission.reviewedAt ??= null;
+    submission.reviewedBy ??= null;
   }
   for (const [orderId, order] of fulfillmentOrders) {
     if (!validUserIds.has(order.userId)) { fulfillmentOrders.delete(orderId); changed = true; continue; }
@@ -526,7 +545,10 @@ const onboardingSchema = z.object({
   name: z.string().trim().min(1).max(60),
   email: z.string().email(),
   password: strongPasswordSchema.optional(),
-  focus: z.enum(['single-use', 'food', 'repair']),
+  oauthOnboardingToken: z.string().min(64).max(200).optional(),
+  focus: z.enum(['single-use', 'food', 'repair']).optional(),
+}).superRefine((input, context) => {
+  if (!input.password && !input.oauthOnboardingToken) context.addIssue({ code: z.ZodIssueCode.custom, path: ['password'], message: 'Create a password or continue with a verified sign-in provider.' });
 });
 const completeOnboardingSchema = z.object({ mascotName: z.string().trim().min(1).max(30) });
 
@@ -609,12 +631,28 @@ const impactInputSchema = z.object({
   estimatedWeightKg: z.number().positive().max(1000),
   source: z.enum(['measured', 'calibrated']).default('measured'),
 });
-const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000), impact: impactInputSchema.optional() });
 const calibrationSchema = z.object({
   id: z.string().trim().regex(/^[a-z0-9-]+$/).max(80),
   itemName: z.string().trim().min(2).max(100),
   wasteStream: z.enum(['plastic', 'food', 'other']),
   sampleWeightsGrams: z.array(z.number().positive().max(100_000)).min(10).max(100),
+});
+const reviewSchema = z.object({
+  decision: z.enum(['approved', 'changes_requested']),
+  points: z.number().int().min(0).max(5000),
+  note: z.string().trim().max(500).optional().default(''),
+  impact: impactInputSchema.optional(),
+}).refine((value) => value.decision !== 'changes_requested' || value.note.length >= 6, {
+  message: 'Explain what the member needs to change.',
+  path: ['note'],
+});
+const taskTemplateSchema = z.object({
+  title: z.string().trim().min(3).max(100),
+  description: z.string().trim().min(10).max(600),
+  points: z.number().int().min(0).max(1000),
+  kind: z.literal('photo').default('photo'),
+  accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']).nullable().default(null),
+  active: z.boolean().default(true),
 });
 const handoffExchangeSchema = z.object({ handoffToken: z.string().min(10) });
 const memberAccessorySchema = z.object({ accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']) });
@@ -664,6 +702,11 @@ const accessoryQuestTemplates: Record<AccessoryId, Array<{ title: string; descri
     { title: 'Avoid three single-use items', description: 'Show the reusable alternatives that replaced three single-use plastic items today.', points: 30, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'single-use-container', itemCount: 3, reviewMode: 'staff' } },
   ],
 };
+
+const defaultTaskTemplates: TaskTemplate[] = [
+  ...questTemplates.map((template, index) => ({ id: `general-${index + 1}`, ...template, accessoryId: null, active: true })),
+  ...Object.entries(accessoryQuestTemplates).flatMap(([accessoryId, templates]) => templates.map((template, index) => ({ id: `${accessoryId}-${index + 1}`, ...template, kind: 'photo' as const, accessoryId: accessoryId as AccessoryId, active: true }))),
+];
 
 const accessoryNames: Record<AccessoryId, string> = {
   'bright-star': 'Bright star', 'petal-pin': 'Petal pin', 'sunny-cap': 'Sunny cap', 'trail-scarf': 'Trail scarf', 'cloud-mitts': 'Cloud mitts', 'meadow-socks': 'Meadow socks', 'tide-loop': 'Tide loop',
@@ -801,9 +844,21 @@ function previousSingaporeDate(date: string) {
 }
 
 function createDailyQuests(user: User, date: string): DailyQuest[] {
-  const seed = [...date].reduce((total, character) => (total * 31 + character.charCodeAt(0)) >>> 0, 7);
-  const generalStart = seed % questTemplates.length;
-  return Array.from({ length: 3 }, (_, index) => ({ id: `${date}-daily-${index + 1}`, ...(questTemplates[(generalStart + index * 2) % questTemplates.length] ?? questTemplates[0]!), completed: false }));
+  const identitySeed = `${date}:${user.id}`;
+  const seed = [...identitySeed].reduce((total, character) => (total * 31 + character.charCodeAt(0)) >>> 0, 7);
+  const enabledTemplates = [...taskTemplates.values()].filter((template) => template.active);
+  const generalTemplates = enabledTemplates.filter((template) => template.accessoryId === null);
+  const equipped = user.equippedAccessories.filter((accessoryId) => enabledTemplates.some((template) => template.accessoryId === accessoryId));
+  const accessoryId = equipped.length ? equipped[seed % equipped.length] : undefined;
+  const accessoryOptions = accessoryId ? enabledTemplates.filter((template) => template.accessoryId === accessoryId) : undefined;
+  const accessoryQuest = accessoryId && accessoryOptions?.length
+    ? { ...accessoryOptions[(seed >>> 3) % accessoryOptions.length]!, sourceAccessoryId: accessoryId }
+    : null;
+  const fallbackTemplates = generalTemplates.length ? generalTemplates : defaultTaskTemplates.filter((template) => template.accessoryId === null);
+  const generalStart = (seed >>> 5) % fallbackTemplates.length;
+  const selected = Array.from({ length: accessoryQuest ? 2 : 3 }, (_, index) => fallbackTemplates[(generalStart + index * 2) % fallbackTemplates.length] ?? fallbackTemplates[0]!);
+  const templates = accessoryQuest ? [accessoryQuest, ...selected] : selected;
+  return templates.map(({ id: _templateId, accessoryId: _accessoryId, active: _active, ...template }, index) => ({ id: `${date}-daily-${index + 1}`, ...template, completed: false }));
 }
 
 function applyDailyWristbandTap(user: User) {
@@ -987,6 +1042,13 @@ function createOAuthAttempt(provider: OAuthProvider, platform: OAuthAttempt['pla
   return oauthAuthorizationUrl(provider, state);
 }
 
+function createOAuthOnboarding(profile: { email: string; name: string; subject: string }, provider: OAuthProvider) {
+  const token = randomBytes(48).toString('hex');
+  oauthOnboardingTokens.set(token, { provider, subject: profile.subject, email: profile.email.toLowerCase(), name: profile.name, expiresAt: Date.now() + 15 * 60 * 1000 });
+  for (const [key, onboarding] of oauthOnboardingTokens) if (onboarding.expiresAt <= Date.now()) oauthOnboardingTokens.delete(key);
+  return token;
+}
+
 async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: { email: string; name: string; subject: string }) {
   const email = profile.email.toLowerCase();
   const linkedElsewhere = [...users.values()].find((candidate) => candidate.linkedAccounts.some((account) => account.provider === attempt.provider && account.subject === profile.subject));
@@ -1015,7 +1077,8 @@ async function finishOAuth(response: Response, attempt: OAuthAttempt, profile: {
   const user = linkedElsewhere ?? users.get(email);
   if (!account || !user) {
     const destination = attempt.platform === 'mobile' ? 'novo://auth/oauth' : `${publicAppUrl()}/`;
-    response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}`);
+    const onboardingToken = attempt.platform === 'mobile' ? createOAuthOnboarding({ ...profile, email }, attempt.provider) : null;
+    response.redirect(`${destination}?oauthNew=1&email=${encodeURIComponent(email)}&name=${encodeURIComponent(profile.name)}${onboardingToken ? `&onboardingToken=${encodeURIComponent(onboardingToken)}` : ''}`);
     return;
   }
   if (account.status === 'suspended') {
@@ -1099,6 +1162,29 @@ function requirePortalRole(...allowed: PortalRole[]) {
     if (!allowed.includes(role)) return response.status(403).json({ message: 'Your role cannot access this workspace.' });
     response.locals.portalRole = role;
     next();
+  };
+}
+
+function portalCanManageEvent(request: Request, response: Response, event: PortalEvent) {
+  if (response.locals.portalRole !== 'organizer') return true;
+  const accountId = sessionFromRequest(request)?.accountId;
+  return accountId ? event.organizerId === accountId : process.env.NODE_ENV !== 'production';
+}
+
+function memberEventView(event: PortalEvent, user: User, now = Date.now()) {
+  return {
+    id: event.id,
+    title: event.title,
+    location: event.location,
+    startsAt: event.startsAt,
+    durationMinutes: event.durationMinutes,
+    capacity: event.capacity,
+    points: event.points,
+    attending: event.attendees.length,
+    registered: event.attendees.includes(user.id),
+    status: Date.parse(event.startsAt) <= now ? 'live' as const : 'scheduled' as const,
+    latitude: event.latitude,
+    longitude: event.longitude,
   };
 }
 
@@ -1428,7 +1514,16 @@ app.post('/api/auth/google', async (request, response, next) => {
 app.post('/api/auth/onboarding', async (request, response, next) => {
   try {
     const input = onboardingSchema.parse(request.body);
-    const user = createMember({ ...input, mascotName: '', onboardingCompleted: false });
+    const email = input.email.toLowerCase();
+    const oauthOnboarding = input.oauthOnboardingToken ? oauthOnboardingTokens.get(input.oauthOnboardingToken) : undefined;
+    if (input.oauthOnboardingToken && (!oauthOnboarding || oauthOnboarding.expiresAt <= Date.now())) return response.status(401).json({ message: 'This verified sign-in has expired. Return to sign in and try again.' });
+    if (oauthOnboarding && oauthOnboarding.email !== email) return response.status(400).json({ message: 'The verified account does not match this email address.' });
+    if (oauthOnboarding && [...users.values()].some((candidate) => candidate.linkedAccounts.some((linked) => linked.provider === oauthOnboarding.provider && linked.subject === oauthOnboarding.subject))) return response.status(409).json({ message: `This ${oauthCredentials(oauthOnboarding.provider).label} account is already linked to novo.` });
+    const user = createMember({ name: input.name, email, password: input.password, mascotName: '', onboardingCompleted: false });
+    if (oauthOnboarding) {
+      user.linkedAccounts.push({ provider: oauthOnboarding.provider, subject: oauthOnboarding.subject, email: oauthOnboarding.email });
+      oauthOnboardingTokens.delete(input.oauthOnboardingToken!);
+    }
     const token = createMobileSession(user.id);
     await persistDatabase(persistedCollections);
     response.status(201).json({ isNewUser: false, token, user, accountStatus: 'active' });
@@ -1624,20 +1719,7 @@ app.get('/api/member/tasks', (request, response) => {
       return event.status === 'open' && Number.isFinite(startsAt) && endsAt >= now;
     })
     .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt))
-    .map((event) => ({
-      id: event.id,
-      title: event.title,
-      location: event.location,
-      startsAt: event.startsAt,
-      durationMinutes: event.durationMinutes,
-      capacity: event.capacity,
-      points: event.points,
-      attending: event.attendees.length,
-      registered: event.attendees.includes(user.id),
-      status: Date.parse(event.startsAt) <= now ? 'live' as const : 'scheduled' as const,
-      latitude: event.latitude,
-      longitude: event.longitude,
-    }));
+    .map((event) => memberEventView(event, user, now));
   response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(memberSubmission), weeklyCompetition: weeklyCompetitionView(user) });
 });
 
@@ -1707,7 +1789,18 @@ app.post('/api/member/events/:eventId/signup', (request, response) => {
   if (!event || event.status !== 'open') return response.status(404).json({ message: 'This event is no longer accepting registrations.' });
   if (event.capacity !== null && event.attendees.length >= event.capacity && !event.attendees.includes(user.id)) return response.status(409).json({ message: 'This event has reached capacity.' });
   event.attendees = Array.from(new Set([...event.attendees, user.id]));
-  response.json({ event: { id: event.id, title: event.title, location: event.location, startsAt: event.startsAt, durationMinutes: event.durationMinutes, capacity: event.capacity, points: event.points, attending: event.attendees.length, registered: true, status: Date.parse(event.startsAt) <= Date.now() ? 'live' : 'scheduled', latitude: event.latitude, longitude: event.longitude } });
+  response.json({ event: memberEventView(event, user) });
+});
+
+app.delete('/api/member/events/:eventId/signup', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  const event = portalEvents.get(routeParam(request.params.eventId));
+  if (!event || event.status !== 'open') return response.status(404).json({ message: 'This event is no longer available.' });
+  if (event.checkedInUserIds.includes(user.id)) return response.status(409).json({ message: 'Attendance has already been verified, so this registration cannot be cancelled.' });
+  if (Date.parse(event.startsAt) <= Date.now()) return response.status(409).json({ message: 'Registration can no longer be cancelled after the event starts.' });
+  event.attendees = event.attendees.filter((attendeeId) => attendeeId !== user.id);
+  response.json({ event: memberEventView(event, user) });
 });
 
 app.post('/api/member/tasks/custom', async (request, response, next) => {
@@ -1990,17 +2083,57 @@ app.get('/api/portal/overview', requirePortalRole('organizer', 'staff', 'admin')
   });
 });
 
-app.get('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'), (_request, response) => {
-  response.json({ events: [...portalEvents.values()] });
+app.get('/api/portal/task-templates', requirePortalRole('staff', 'admin'), (_request, response) => {
+  response.json({ templates: [...taskTemplates.values()].sort((left, right) => Number(right.active) - Number(left.active) || left.title.localeCompare(right.title)) });
+});
+
+app.post('/api/portal/task-templates', requirePortalRole('staff', 'admin'), (request, response, next) => {
+  try {
+    const input = taskTemplateSchema.parse(request.body);
+    const template: TaskTemplate = { id: `task_${crypto.randomUUID()}`, ...input };
+    taskTemplates.set(template.id, template);
+    response.status(201).json({ template });
+  } catch (error) { next(error); }
+});
+
+app.patch('/api/portal/task-templates/:templateId', requirePortalRole('staff', 'admin'), (request, response, next) => {
+  try {
+    const template = taskTemplates.get(routeParam(request.params.templateId));
+    if (!template) return response.status(404).json({ message: 'Task template not found.' });
+    const input = taskTemplateSchema.partial().refine((value) => Object.keys(value).length > 0, 'Provide at least one task-template change.').parse(request.body);
+    Object.assign(template, input);
+    response.json({ template });
+  } catch (error) { next(error); }
+});
+
+app.delete('/api/portal/task-templates/:templateId', requirePortalRole('staff', 'admin'), (request, response) => {
+  const templateId = routeParam(request.params.templateId);
+  const template = taskTemplates.get(templateId);
+  if (!template) return response.status(404).json({ message: 'Task template not found.' });
+  const remainingGeneral = [...taskTemplates.values()].filter((item) => item.id !== templateId && item.active && item.accessoryId === null);
+  if (template.accessoryId === null && remainingGeneral.length < 3) return response.status(409).json({ message: 'Keep at least three active general task templates for every daily board.' });
+  taskTemplates.delete(templateId);
+  response.status(204).send();
+});
+
+app.get('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'), (request, response) => {
+  const session = sessionFromRequest(request);
+  const events = response.locals.portalRole === 'organizer' && session
+    ? [...portalEvents.values()].filter((event) => event.organizerId === session.accountId)
+    : [...portalEvents.values()];
+  response.json({ events });
 });
 
 app.post('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'), (request, response, next) => {
   try {
     const input = eventSchema.parse(request.body);
+    const session = sessionFromRequest(request);
+    const organizerId = response.locals.portalRole === 'organizer' && session ? session.accountId : input.organizerId;
     const inferredCoordinates = coordinatesForSingaporeLocation(input.location);
     const event: PortalEvent = {
       id: `evt_${crypto.randomUUID()}`,
       ...input,
+      organizerId,
       latitude: input.latitude ?? inferredCoordinates.latitude,
       longitude: input.longitude ?? inferredCoordinates.longitude,
       attendees: [],
@@ -2017,6 +2150,7 @@ app.patch('/api/portal/events/:eventId', requirePortalRole('organizer', 'staff',
   try {
     const event = portalEvents.get(routeParam(request.params.eventId));
     if (!event) return response.status(404).json({ message: 'Event not found.' });
+    if (!portalCanManageEvent(request, response, event)) return response.status(403).json({ message: 'Organizers can only edit their own events.' });
     const input = eventSchema.partial().refine((value) => Object.keys(value).length > 0, 'Provide at least one event change.').parse(request.body);
     Object.assign(event, input);
     if (input.location && input.latitude === undefined && input.longitude === undefined) Object.assign(event, coordinatesForSingaporeLocation(input.location));
@@ -2025,8 +2159,11 @@ app.patch('/api/portal/events/:eventId', requirePortalRole('organizer', 'staff',
 });
 
 app.delete('/api/portal/events/:eventId', requirePortalRole('organizer', 'staff', 'admin'), (request, response) => {
-  const deleted = portalEvents.delete(routeParam(request.params.eventId));
-  if (!deleted) return response.status(404).json({ message: 'Event not found.' });
+  const eventId = routeParam(request.params.eventId);
+  const event = portalEvents.get(eventId);
+  if (!event) return response.status(404).json({ message: 'Event not found.' });
+  if (!portalCanManageEvent(request, response, event)) return response.status(403).json({ message: 'Organizers can only delete their own events.' });
+  portalEvents.delete(eventId);
   response.status(204).send();
 });
 
@@ -2038,6 +2175,13 @@ app.post('/api/portal/events/:eventId/check-in', requirePortalRole('organizer', 
     const attendeeId = tag.pairedUserId;
     const event = portalEvents.get(routeParam(request.params.eventId));
     if (!event) return response.status(404).json({ message: 'Event not found.' });
+    if (!portalCanManageEvent(request, response, event)) return response.status(403).json({ message: 'Organizers can only verify attendance for their own events.' });
+    const startsAt = Date.parse(event.startsAt);
+    const endsAt = startsAt + event.durationMinutes * 60_000;
+    const now = Date.now();
+    if (!Number.isFinite(startsAt) || now < startsAt - 30 * 60_000 || now > endsAt + 4 * 60 * 60_000) {
+      return response.status(409).json({ message: 'Attendance can be verified from 30 minutes before the event until four hours after it ends.' });
+    }
     if (!event.attendees.includes(attendeeId)) return response.status(403).json({ message: 'This wristband owner is not registered for this event.' });
     if (event.checkedInUserIds.includes(attendeeId)) return response.status(409).json({ message: 'This wristband has already completed attendance for this event.' });
     event.attendees = Array.from(new Set([...event.attendees, attendeeId]));
@@ -2052,7 +2196,13 @@ app.post('/api/portal/events/:eventId/check-in', requirePortalRole('organizer', 
 
 app.get('/api/portal/submissions', requirePortalRole('staff', 'admin'), (request, response) => {
   const all = request.query.scope === 'all';
-  response.json({ submissions: [...submissions.values()].filter((submission) => all || submission.status === 'pending').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
+  response.json({ submissions: [...submissions.values()].filter((submission) => all || submission.status === 'pending').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(portalSubmissionSummary) });
+});
+
+app.get('/api/portal/submissions/:submissionId', requirePortalRole('staff', 'admin'), (request, response) => {
+  const submission = submissions.get(routeParam(request.params.submissionId));
+  if (!submission) return response.status(404).json({ message: 'Submission not found.' });
+  response.json({ submission: { ...submission, photoEmbedding: undefined } });
 });
 
 app.get('/api/portal/impact/calibrations', requirePortalRole('staff', 'admin'), (_request, response) => {
@@ -2103,6 +2253,7 @@ app.post('/api/portal/submissions/:submissionId/review', requirePortalRole('staf
     const input = reviewSchema.parse(request.body);
     const submission = submissions.get(routeParam(request.params.submissionId));
     if (!submission) return response.status(404).json({ message: 'Submission not found.' });
+    if (submission.status !== 'pending') return response.status(409).json({ message: 'This submission has already been reviewed.' });
     submission.status = input.decision;
     submission.points = input.decision === 'approved' ? input.points : 0;
     if (input.impact) {
@@ -2111,6 +2262,9 @@ app.post('/api/portal/submissions/:submissionId/review', requirePortalRole('staf
       submission.estimatedWeightKg = rounded(input.impact.estimatedWeightKg);
       submission.impactSource = input.impact.source;
     }
+    submission.reviewNote = input.note || (input.decision === 'approved' ? 'Evidence verified by the Novo team.' : null);
+    submission.reviewedAt = new Date().toISOString();
+    submission.reviewedBy = sessionFromRequest(request)?.accountId ?? null;
     if (input.decision === 'approved' && !submission.rewardApplied) {
       const user = findUser(submission.userId);
       if (user) {

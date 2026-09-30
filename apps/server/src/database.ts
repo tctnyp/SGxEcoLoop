@@ -21,6 +21,7 @@ const collectionTables = {
   donations: 'marketplace_donations',
   portalEvents: 'task_events',
   weeklyEntries: 'task_weekly_entries',
+  taskTemplates: 'task_templates',
   submissions: 'review_queue',
   nfcTags: 'wristband_tags',
   accessoryQrTags: 'wristband_accessory_tags',

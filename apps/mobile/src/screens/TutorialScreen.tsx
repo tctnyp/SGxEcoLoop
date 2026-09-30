@@ -75,28 +75,29 @@ export function TutorialScreen({ user, onComplete }: Props) {
   };
 
   const next = async () => {
+    const name = mascotName.trim();
+    if (step === 0 && name.length > 30) return setError('Keep your mascot name to 30 characters or fewer.');
     if (step < lessons.length - 1) {
       setError('');
       setStep((current) => current + 1);
       return;
     }
-    const name = mascotName.trim();
     if (!name) return;
     await finish(name);
   };
 
-  const skip = () => finish(mascotName.trim() || 'Nova');
+  const skip = () => finish(mascotName.trim());
 
   return <SafeAreaView style={styles.safe}>
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.topbar}>
         {step > 0 ? <Pressable onPress={() => setStep((current) => current - 1)} accessibilityRole="button" accessibilityLabel="Previous tutorial step" style={styles.roundButton}><Ionicons name="arrow-back" size={21} color={colors.ink} /></Pressable> : <Logo compact />}
-        <Text style={styles.step}>STEP {step + 1} OF {lessons.length}</Text>
-        {step < lessons.length - 1
-          ? <Pressable onPress={() => void skip()} disabled={loading} accessibilityRole="button" accessibilityLabel="Skip tutorial" style={({ pressed }) => [styles.skip, pressed && styles.skipPressed, loading && styles.skipDisabled]}><Text style={styles.skipText}>Skip</Text></Pressable>
+        <Text style={styles.step}>{step === 0 ? 'MASCOT · 3 OF 3' : `GUIDE ${step + 1} OF ${lessons.length}`}</Text>
+        {step > 0 && step < lessons.length - 1
+          ? <Pressable onPress={() => void skip()} disabled={loading} accessibilityRole="button" accessibilityLabel="Skip the remaining guide" style={({ pressed }) => [styles.skip, pressed && styles.skipPressed, loading && styles.skipDisabled]}><Text style={styles.skipText}>Skip guide</Text></Pressable>
           : <View style={styles.topbarEndSpacer} />}
       </View>
-      <View style={styles.progressTrack}><View style={[styles.progressFill, { width: progress }]} /></View>
+      <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: lessons.length, now: step + 1, text: `Guide step ${step + 1} of ${lessons.length}` }} style={styles.progressTrack}><View style={[styles.progressFill, { width: progress }]} /></View>
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {step === 0 ? <View style={styles.mascotStage}>
           <View style={styles.halo} />
@@ -110,7 +111,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
         </View>
         {step === 0 ? <View style={styles.nameBlock}>
           <TextField label="Mascot name" value={mascotName} onChangeText={setMascotName} placeholder={`Name your ${animalLabels[user.mascotType].toLowerCase()}`} icon="leaf-outline" />
-          <Text style={styles.nameHint}>You can take your time—this name is saved only after the tutorial.</Text>
+          <Text style={styles.nameHint}>Naming comes after pairing because your wristband decides which animal appears.</Text>
         </View> : <TutorialPoints step={step} />}
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <Button label={step === lessons.length - 1 ? `Finish with ${mascotName.trim() || 'your mascot'}` : 'Next'} onPress={next} loading={loading} disabled={step === 0 && !mascotName.trim()} icon={step === lessons.length - 1 ? 'sparkles' : 'arrow-forward'} />
@@ -141,11 +142,11 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   topbar: { minHeight: 64, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   roundButton: { width: 42, height: 42, borderRadius: 16, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DDE5D9', alignItems: 'center', justifyContent: 'center' },
-  skip: { minWidth: 66, minHeight: 40, paddingHorizontal: 14, borderRadius: 99, backgroundColor: '#EFF3EC', alignItems: 'center', justifyContent: 'center' },
+  skip: { minWidth: 82, minHeight: 40, paddingHorizontal: 12, borderRadius: 99, backgroundColor: '#EFF3EC', alignItems: 'center', justifyContent: 'center' },
   skipPressed: { opacity: 0.72 },
   skipDisabled: { opacity: 0.45 },
   skipText: { color: colors.forest, fontSize: 13, fontWeight: '800' },
-  topbarEndSpacer: { width: 66, height: 40 },
+  topbarEndSpacer: { width: 82, height: 40 },
   step: { color: colors.inkMuted, fontSize: 12, fontWeight: '800', letterSpacing: 0.8 },
   progressTrack: { height: 6, marginHorizontal: 20, borderRadius: 99, backgroundColor: '#E4EAE0', overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 99, backgroundColor: colors.limeBright },

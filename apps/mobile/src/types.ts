@@ -7,7 +7,7 @@ export type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 export type WasteStream = 'plastic' | 'food' | 'other';
 export type WasteAction = 'reduced' | 'repurposed' | 'recycled';
 export type ImpactTotals = { divertedKg: number; plasticKg: number; foodKg: number; otherKg: number; foodCo2eKg: number; approvedActions: number };
-export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; impact?: { wasteStream: WasteStream; action: WasteAction; calibrationKey: string | null; itemCount: number; reviewMode: 'ai' | 'staff' }; lesson?: { title: string; summary: string; question: string; options: string[] } };
+export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; sourceAccessoryId?: AccessoryId; impact?: { wasteStream: WasteStream; action: WasteAction; calibrationKey: string | null; itemCount: number; reviewMode: 'ai' | 'staff' }; lesson?: { title: string; summary: string; question: string; options: string[] } };
 export type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 export type AccessoryId =
@@ -93,7 +93,7 @@ export type NovoEvent = {
   longitude: number | null;
 };
 
-export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; wasteStream: WasteStream | null; wasteAction: WasteAction | null; estimatedWeightKg: number | null; impactSource: 'measured' | 'calibrated' | 'unavailable' | null };
+export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; questId?: string; reviewNote?: string | null; reviewedAt?: string | null; wasteStream: WasteStream | null; wasteAction: WasteAction | null; estimatedWeightKg: number | null; impactSource: 'measured' | 'calibrated' | 'unavailable' | null };
 export type ImpactSummary = {
   personal: ImpactTotals;
   community: ImpactTotals;
@@ -126,5 +126,5 @@ export type AuthResult = {
   accountStatus?: AccountStatus;
   token?: string;
   user?: User;
-  draft?: Pick<User, 'name' | 'email'>;
+  draft?: Pick<User, 'name' | 'email'> & { oauthProvider?: OAuthProvider; oauthOnboardingToken?: string };
 };
