@@ -229,6 +229,36 @@ describe('novo API', () => {
     assert.equal(response.status, 404);
   });
 
+  it('allows an explicitly enabled development simulator to complete pairing without weakening production', async () => {
+    const previousBypass = process.env.NOVO_PILOT_BYPASS;
+    const previousAllowAny = process.env.NOVO_PILOT_ALLOW_ANY;
+    const { authorization } = await createMember('simulator-pairing@example.com');
+    try {
+      delete process.env.NOVO_PILOT_BYPASS;
+      delete process.env.NOVO_PILOT_ALLOW_ANY;
+      const productionCapabilities = await request(app).get('/api/member/pilot-capabilities').set('authorization', authorization);
+      assert.equal(productionCapabilities.status, 200);
+      assert.equal(productionCapabilities.body.wristbandBypass, false);
+      const denied = await request(app).post('/api/member/wristband/pilot-bypass').set('authorization', authorization);
+      assert.equal(denied.status, 403);
+
+      process.env.NOVO_PILOT_BYPASS = '1';
+      process.env.NOVO_PILOT_ALLOW_ANY = '1';
+      const developmentCapabilities = await request(app).get('/api/member/pilot-capabilities').set('authorization', authorization);
+      assert.equal(developmentCapabilities.status, 200);
+      assert.equal(developmentCapabilities.body.wristbandBypass, true);
+      const paired = await request(app).post('/api/member/wristband/pilot-bypass').set('authorization', authorization);
+      assert.equal(paired.status, 200);
+      assert.equal(paired.body.user.wristbandPaired, true);
+      assert.match(paired.body.user.wristbandPickupLocation, /Pilot demo bypass/);
+    } finally {
+      if (previousBypass === undefined) delete process.env.NOVO_PILOT_BYPASS;
+      else process.env.NOVO_PILOT_BYPASS = previousBypass;
+      if (previousAllowAny === undefined) delete process.env.NOVO_PILOT_ALLOW_ANY;
+      else process.env.NOVO_PILOT_ALLOW_ANY = previousAllowAny;
+    }
+  });
+
   it('stores custom task evidence for staff when AI is unavailable', async () => {
     const { authorization } = await createMember('task@example.com');
     const submitted = await request(app).post('/api/member/tasks/custom').set('authorization', authorization).send({ title: 'Sorted home recycling', description: 'Separated clean cans and bottles from the general waste bin.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('photo').toString('base64')}` });

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Platform, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '../components/Button';
 import { Logo } from '../components/Logo';
@@ -107,7 +107,21 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
       setPairedUser(paired);
       setState('success');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'We could not read the wristband.');
+      const message = reason instanceof Error ? reason.message : 'We could not read the wristband.';
+      if (pilotBypass && Platform.OS === 'ios' && /core nfc|entitlement|not support|unavailable/i.test(message)) {
+        setError('The iOS Simulator has no NFC reader. Use the simulated wristband tap to test the rest of pairing.');
+        setState('ready');
+        Alert.alert(
+          'NFC is unavailable in the simulator',
+          'Apple’s iOS Simulator cannot emulate a physical NFC scan. Continue with a clearly marked test wristband instead?',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Simulate wristband tap', onPress: () => { void continueAsPilot(); } },
+          ],
+        );
+        return;
+      }
+      setError(message);
       setState('error');
     }
   };
@@ -151,7 +165,7 @@ export function PairWristbandScreen({ user, loadPickupLocations, loadPilotCapabi
       <View style={styles.collectionHero}><Ionicons name="cube-outline" size={30} color={colors.forest}/><View style={{flex:1}}><Text style={styles.optionTitle}>I need a wristband</Text><Text style={styles.optionText}>Your selected point is saved to your account. It does not unlock the app until the wristband is paired.</Text></View></View>
       <View style={styles.pickupBlock}><Text style={styles.pickupLabel}>Wristband collection point</Text><Pressable style={styles.pickupButton} onPress={() => setShowLocations((value) => !value)}><Ionicons name="location-outline" size={19} color={colors.forest}/><Text numberOfLines={2} style={[styles.pickupText,!pickup && styles.placeholder]}>{pickup || 'Choose Pick! or POPStation'}</Text><Ionicons name={showLocations ? 'chevron-up' : 'chevron-down'} size={18} color={colors.inkMuted}/></Pressable>{showLocations && <View style={styles.locationMenu}><View style={styles.search}><Ionicons name="search" size={17} color={colors.inkMuted}/><TextInput value={query} onChangeText={setQuery} placeholder="Search name, address or postal code" style={styles.searchInput}/></View><ScrollView style={styles.locationList} keyboardShouldPersistTaps="handled">{loadingLocations ? <View style={{ minHeight: 90, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color={colors.forest}/><Text style={styles.emptyLocations}>Loading collection points…</Text></View> : shown.map((location) => <Pressable key={location.id} style={styles.locationRow} onPress={() => { setPickup(`${location.name} · ${location.address}`); setPickupConfirmed(false); setShowLocations(false); }}><View style={{flex:1}}><Text style={styles.locationName}>{location.name}</Text><Text style={styles.locationAddress}>{location.address}</Text></View><View style={styles.locationMeta}><Text style={styles.provider}>{location.kind === 'pick-locker' ? 'PICK!' : 'POP'}</Text>{typeof location.distanceKm === 'number' && <Text style={styles.distance}>{location.distanceKm < 1 ? `${Math.round(location.distanceKm * 1000)} m` : `${location.distanceKm.toFixed(1)} km`}</Text>}</View></Pressable>)}{!loadingLocations && !shown.length && <Text style={styles.emptyLocations}>No matching collection point. Try a postal code or neighbourhood.</Text>}</ScrollView></View>}</View>
     </View>}
-    <View style={styles.footer}>{error ? <Text style={styles.error}>{error}</Text> : null}{mode === 'pair' ? state === 'success' ? <Button label="Meet my mascot" icon="sparkles" onPress={() => pairedUser && onPaired(pairedUser)}/> : <>{Platform.OS === 'web' && <Text style={styles.webNotice}>Install the Android or iOS app to pair the NFC wristband.</Text>}<Button label={state === 'scanning' ? 'Waiting for wristband…' : Platform.OS === 'web' ? 'NFC needs the installed app' : 'Tap wristband to pair'} icon="radio" onPress={startPairing} loading={state === 'scanning'} disabled={Platform.OS === 'web'}/><Pressable onPress={() => { setMode('collect'); setError(''); }} style={styles.secondaryAction}><Ionicons name="location-outline" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>I don’t have a wristband</Text><Ionicons name="chevron-forward" size={17} color={colors.forest}/></Pressable>{pilotBypass && <Pressable onPress={() => void continueAsPilot()} style={styles.pilotAction}><Ionicons name="flask-outline" size={17} color={colors.purple}/><Text style={styles.pilotActionText}>Demo/pilot: continue without hardware</Text></Pressable>}<Text style={styles.help}>You cannot continue to Home until a prepared novo wristband is paired. Pilot bypasses are explicitly labelled test data.</Text></> : <><Button label={savingPickup ? 'Saving collection point…' : 'Save collection point'} icon="location" onPress={reservePickup} loading={savingPickup} disabled={!pickup || savingPickup}/><Pressable onPress={() => { setMode('pair'); setError(''); }} style={styles.secondaryAction}><Ionicons name="arrow-back" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>Back to wristband pairing</Text></Pressable><Text style={styles.help}>After collection, reopen novo and pair the wristband to meet your animal mascot.</Text></>}</View>
+    <View style={styles.footer}>{error ? <Text style={styles.error}>{error}</Text> : null}{mode === 'pair' ? state === 'success' ? <Button label="Meet my mascot" icon="sparkles" onPress={() => pairedUser && onPaired(pairedUser)}/> : <>{Platform.OS === 'web' && <Text style={styles.webNotice}>Install the Android or iOS app to pair the NFC wristband.</Text>}<Button label={state === 'scanning' ? 'Waiting for wristband…' : Platform.OS === 'web' ? 'NFC needs the installed app' : 'Tap wristband to pair'} icon="radio" onPress={startPairing} loading={state === 'scanning'} disabled={Platform.OS === 'web'}/><Pressable onPress={() => { setMode('collect'); setError(''); }} style={styles.secondaryAction}><Ionicons name="location-outline" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>I don’t have a wristband</Text><Ionicons name="chevron-forward" size={17} color={colors.forest}/></Pressable>{pilotBypass && <Pressable accessibilityRole="button" accessibilityLabel="Simulate a wristband tap for development testing" onPress={() => void continueAsPilot()} style={styles.pilotAction}><Ionicons name="flask-outline" size={17} color={colors.purple}/><Text style={styles.pilotActionText}>Simulator/pilot: simulate wristband tap</Text></Pressable>}<Text style={styles.help}>{pilotBypass ? 'A simulated tap is labelled test data and is available only on the development server. Production still requires a prepared physical wristband.' : 'You cannot continue to Home until a prepared novo wristband is paired.'}</Text></> : <><Button label={savingPickup ? 'Saving collection point…' : 'Save collection point'} icon="location" onPress={reservePickup} loading={savingPickup} disabled={!pickup || savingPickup}/><Pressable onPress={() => { setMode('pair'); setError(''); }} style={styles.secondaryAction}><Ionicons name="arrow-back" size={18} color={colors.forest}/><Text style={styles.secondaryActionText}>Back to wristband pairing</Text></Pressable><Text style={styles.help}>After collection, reopen novo and pair the wristband to meet your animal mascot.</Text></>}</View>
   </View></SafeAreaView>;
 }
 

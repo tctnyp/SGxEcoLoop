@@ -11,6 +11,7 @@ Environment=NOVO_SERVER_HOST=127.0.0.1
 Environment=PORT=4001
 Environment=CLIENT_ORIGIN=https://novodev.tancheetiong.com
 Environment=NOVO_PILOT_BYPASS=1
+Environment=NOVO_PILOT_ALLOW_ANY=1
 EnvironmentFile=/etc/novo-db.env
 EnvironmentFile=/etc/novo-yolo.env
 ExecStart=/usr/bin/npm run dev:web
