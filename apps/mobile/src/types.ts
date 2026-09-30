@@ -1,6 +1,11 @@
-export type Screen = 'signin' | 'onboarding' | 'pair-plushie' | 'home' | 'scan-accessory';
+export type Screen = 'signin' | 'onboarding' | 'pair-wristband' | 'tutorial' | 'home' | 'account-status';
+export type AccountStatus = 'active' | 'limited' | 'suspended';
 
-export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; sourceAccessoryId?: AccessoryId; sourceAccessoryName?: string };
+export type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
+export type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
+
+export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; sourceAccessoryId?: AccessoryId; lesson?: { title: string; summary: string; question: string; options: string[] } };
+export type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 export type AccessoryId =
   | 'bright-star'
@@ -27,22 +32,30 @@ export type Accessory = {
 export type User = {
   id: string;
   name: string;
+  username: string;
   email: string;
-  plushieName: string;
-  plushieType: string;
-  plushiePaired: boolean;
+  avatarDataUrl: string | null;
+  linkedAccounts: Array<{ provider: OAuthProvider; subject: string; email: string }>;
+  mascotName: string;
+  mascotType: MascotType;
+  wristbandColor: WristbandColor;
+  wristbandPaired: boolean;
+  onboardingCompleted: boolean;
+  wristbandPickupLocation: string | null;
   accessories: AccessoryId[];
-  pendingAccessories: AccessoryId[];
   equippedAccessories: AccessoryId[];
   friendIds: string[];
   notificationPreferences: NotificationPreferences;
   streak: number;
   points: number;
   lifetimePoints: number;
-  lastPlushieScanAt: string | null;
+  lastWristbandTapAt: string | null;
   questBoardDate: string | null;
   dailyQuests: DailyQuest[];
+  coupons: RedeemedCoupon[];
 };
+
+export type OAuthProvider = 'google' | 'discord' | 'microsoft';
 
 export type NotificationPreferences = { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
 
@@ -55,6 +68,7 @@ export type NovoLocation = {
   longitude: number;
   hours: string;
   sourceUrl: string;
+  distanceKm?: number;
 };
 
 export type NovoEvent = {
@@ -72,13 +86,27 @@ export type NovoEvent = {
   longitude: number | null;
 };
 
-export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string };
-export type LeaderboardEntry = { rank: number; id: string; name: string; plushieName: string; lifetimePoints: number; accessories: AccessoryId[]; isCurrentUser: boolean };
-export type Friend = { id: string; name: string; plushieName: string; lifetimePoints: number; accessories: AccessoryId[] };
+export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; questId?: string; reviewNote?: string | null; reviewedAt?: string | null };
+export type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
+export type WeeklyCompetition = {
+  id: string;
+  weekId: string;
+  title: string;
+  description: string;
+  startsAt: string;
+  endsAt: string;
+  durationSeconds: number;
+  questions: Array<{ id: string; prompt: string; options: string[] }>;
+  entry: { startedAt: string; completedAt: string | null; elapsedMs: number | null; pointsAwarded: number; rank: number | null } | null;
+  leaderboard: Array<{ rank: number; name: string; elapsedMs: number; points: number; isCurrentUser: boolean }>;
+};
+export type LeaderboardEntry = { rank: number; id: string; name: string; mascotName: string; mascotType: MascotType; lifetimePoints: number; accessories: AccessoryId[]; isCurrentUser: boolean };
+export type Friend = { id: string; name: string; mascotName: string; mascotType: MascotType; lifetimePoints: number; accessories: AccessoryId[] };
 
 export type AuthResult = {
   isNewUser: boolean;
+  accountStatus?: AccountStatus;
   token?: string;
   user?: User;
-  draft?: Pick<User, 'name' | 'email'>;
+  draft?: Pick<User, 'name' | 'email'> & { oauthProvider?: OAuthProvider; oauthOnboardingToken?: string };
 };

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Text } from './Typography';
@@ -42,17 +42,30 @@ function mapDocument(locations: NovoLocation[], events: NovoEvent[], userLocatio
       var userLocation = ${userData};
       var map = new maplibregl.Map({ container: 'map', style: 'https://tiles.openfreemap.org/styles/positron', center: userLocation ? [userLocation.longitude, userLocation.latitude] : [103.8198, 1.3521], zoom: userLocation ? 13.6 : 10.45, attributionControl: false });
       function markerShell(child, size) { var shell = document.createElement('span'); shell.className = 'marker-shell'; shell.style.width = size + 'px'; shell.style.height = size + 'px'; shell.appendChild(child); return shell; }
-      if (userLocation) { var userMarker = document.createElement('span'); userMarker.className = 'user-marker'; new maplibregl.Marker({ element: markerShell(userMarker, 39), anchor: 'center' }).setLngLat([userLocation.longitude, userLocation.latitude]).addTo(map); }
+      var userMarkerInstance = null;
+      window.updateUserLocation = function (latitude, longitude, focus) {
+        if (!userMarkerInstance) { var userMarker = document.createElement('span'); userMarker.className = 'user-marker'; userMarkerInstance = new maplibregl.Marker({ element: markerShell(userMarker, 39), anchor: 'center' }).setLngLat([longitude, latitude]).addTo(map); }
+        else userMarkerInstance.setLngLat([longitude, latitude]);
+        if (focus) map.easeTo({ center: [longitude, latitude], zoom: Math.max(map.getZoom(), 14), duration: 700 });
+      };
+      if (userLocation) window.updateUserLocation(userLocation.latitude, userLocation.longitude, true);
       function escapeHtml(value) { return String(value).replace(/[&<>"']/g, function (character) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]; }); }
-      locations.forEach(function (location) {
-        var marker = document.createElement('span'); marker.className = 'novo-marker';
-        new maplibregl.Marker({ element: markerShell(marker, 36), anchor: 'center' }).setLngLat([location.longitude, location.latitude]).setPopup(new maplibregl.Popup({ offset: 14 }).setHTML('<strong>' + escapeHtml(location.name) + '</strong>' + escapeHtml(location.address) + '<em>Return-Right machine</em>')).addTo(map);
+      var returnPointData = { type: 'FeatureCollection', features: locations.map(function (location) { return { type: 'Feature', geometry: { type: 'Point', coordinates: [location.longitude, location.latitude] }, properties: { id: location.id, name: location.name, address: location.address } }; }) };
+      map.on('load', function () {
+        map.addSource('return-right-points', { type: 'geojson', data: returnPointData, cluster: true, clusterMaxZoom: 14, clusterRadius: 48 });
+        map.addLayer({ id: 'return-right-clusters', type: 'circle', source: 'return-right-points', filter: ['has', 'point_count'], paint: { 'circle-color': ['step', ['get', 'point_count'], '#5A9F7D', 20, '#287E63', 80, '#155C49'], 'circle-radius': ['step', ['get', 'point_count'], 17, 20, 21, 80, 26], 'circle-stroke-width': 3, 'circle-stroke-color': '#FFFFFF', 'circle-opacity': 0.94 } });
+        map.addLayer({ id: 'return-right-cluster-count', type: 'symbol', source: 'return-right-points', filter: ['has', 'point_count'], layout: { 'text-field': ['get', 'point_count_abbreviated'], 'text-size': 11, 'text-font': ['Noto Sans Regular'] }, paint: { 'text-color': '#FFFFFF' } });
+        map.addLayer({ id: 'return-right-point', type: 'circle', source: 'return-right-points', filter: ['!', ['has', 'point_count']], paint: { 'circle-color': '#227A62', 'circle-radius': 8, 'circle-stroke-width': 3, 'circle-stroke-color': '#FFFFFF' } });
+        map.on('click', 'return-right-clusters', function (event) { var feature = event.features && event.features[0]; if (!feature) return; var source = map.getSource('return-right-points'); var clusterId = feature.properties.cluster_id; Promise.resolve(source.getClusterExpansionZoom(clusterId)).then(function (zoom) { map.easeTo({ center: feature.geometry.coordinates, zoom: zoom }); }); });
+        map.on('click', 'return-right-point', function (event) { var feature = event.features && event.features[0]; if (!feature) return; new maplibregl.Popup({ offset: 14 }).setLngLat(feature.geometry.coordinates).setHTML('<strong>' + escapeHtml(feature.properties.name) + '</strong>' + escapeHtml(feature.properties.address) + '<em>Return Right machine</em>').addTo(map); });
+        ['return-right-clusters', 'return-right-point'].forEach(function (layer) { map.on('mouseenter', layer, function () { map.getCanvas().style.cursor = 'pointer'; }); map.on('mouseleave', layer, function () { map.getCanvas().style.cursor = ''; }); });
       });
       events.forEach(function (event) {
         if (typeof event.latitude !== 'number' || typeof event.longitude !== 'number') return;
         var size = Math.min(46, 28 + Math.round(event.points / 45)); var live = event.status === 'live';
-        var marker = document.createElement('span'); marker.className = 'event-marker ' + (live ? 'live' : ''); marker.style.width = size + 'px'; marker.style.height = size + 'px'; marker.style.background = live ? '#E74E43' : '#7058C9'; marker.textContent = event.points;
-        marker.setAttribute('aria-label', event.title); marker.addEventListener('click', function () { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'event', eventId: event.id })); });
+        var marker = document.createElement('span'); marker.className = 'event-marker ' + (live ? 'live' : '') + (event.registered ? ' registered' : ''); marker.style.width = size + 'px'; marker.style.height = size + 'px'; marker.style.background = live ? '#E74E43' : '#7058C9'; marker.textContent = event.registered ? '✓' : event.points;
+        if (event.registered) marker.style.boxShadow = '0 0 0 4px #DFFB84,0 7px 18px rgba(23,53,42,.32)';
+        marker.setAttribute('aria-label', event.title + (event.registered ? ', joined' : '')); marker.addEventListener('click', function () { window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'event', eventId: event.id })); });
         new maplibregl.Marker({ element: markerShell(marker, size + 18), anchor: 'center' }).setLngLat([event.longitude, event.latitude]).addTo(map);
       });
       map.on('error', function (event) { if (!event || !event.error) return; console.warn(event.error.message || 'Map error'); });
@@ -62,10 +75,22 @@ function mapDocument(locations: NovoLocation[], events: NovoEvent[], userLocatio
 </html>`;
 }
 
-export function TasksMap({ locations, events, userLocation, focusUser = 0, onEventPress }: { locations: NovoLocation[]; events: NovoEvent[]; userLocation?: { latitude: number; longitude: number } | null; focusUser?: number; onEventPress?: (eventId: string) => void }) {
-  const html = useMemo(() => mapDocument(locations, events, userLocation), [locations, events, userLocation, focusUser]);
-  return <View style={styles.mapBackdrop}><WebView source={{ html }} originWhitelist={['about:*', 'https://*']} onMessage={(message) => { try { const payload = JSON.parse(message.nativeEvent.data) as { type?: string; eventId?: string }; if (payload.type === 'event' && payload.eventId) onEventPress?.(payload.eventId); } catch { /* Ignore messages not created by the map. */ } }} javaScriptEnabled domStorageEnabled mixedContentMode="never" setSupportMultipleWindows={false} startInLoadingState renderLoading={() => <View style={styles.loading}><ActivityIndicator color="#17352A" /><Text style={styles.loadingText}>Loading live map…</Text></View>} renderError={() => <View style={styles.loading}><Text style={styles.errorTitle}>Map unavailable</Text><Text style={styles.loadingText}>Check your connection and reopen Tasks.</Text></View>} style={styles.map} /></View>;
-}
+export const TasksMap = memo(function TasksMap({ locations, events, userLocation, focusUser = 0, onEventPress }: { locations: NovoLocation[]; events: NovoEvent[]; userLocation?: { latitude: number; longitude: number } | null; focusUser?: number; onEventPress?: (eventId: string) => void }) {
+  const webViewRef = useRef<WebView>(null);
+  const lastFocusRef = useRef(focusUser);
+  const html = useMemo(() => mapDocument(locations, events, null), [locations, events]);
+  const source = useMemo(() => ({ html }), [html]);
+  const sendLocation = (focus: boolean) => {
+    if (!userLocation) return;
+    webViewRef.current?.injectJavaScript(`window.updateUserLocation && window.updateUserLocation(${userLocation.latitude},${userLocation.longitude},${focus ? 'true' : 'false'});true;`);
+  };
+  useEffect(() => {
+    const shouldFocus = focusUser !== lastFocusRef.current;
+    lastFocusRef.current = focusUser;
+    sendLocation(shouldFocus);
+  }, [userLocation?.latitude, userLocation?.longitude, focusUser]);
+  return <View style={styles.mapBackdrop}><WebView ref={webViewRef} source={source} originWhitelist={['about:*', 'https://*']} onLoad={() => sendLocation(true)} onMessage={(message) => { try { const payload = JSON.parse(message.nativeEvent.data) as { type?: string; eventId?: string }; if (payload.type === 'event' && payload.eventId) onEventPress?.(payload.eventId); } catch { /* Ignore messages not created by the map. */ } }} javaScriptEnabled domStorageEnabled mixedContentMode="never" setSupportMultipleWindows={false} startInLoadingState renderLoading={() => <View style={styles.loading}><ActivityIndicator color="#17352A" /><Text style={styles.loadingText}>Loading live map…</Text></View>} renderError={() => <View style={styles.loading}><Text style={styles.errorTitle}>Map unavailable</Text><Text style={styles.loadingText}>Check your connection and reopen Tasks.</Text></View>} style={styles.map} /></View>;
+});
 
 const styles = StyleSheet.create({
   mapBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: '#EEF1ED', overflow: 'hidden' },

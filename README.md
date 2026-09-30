@@ -1,22 +1,26 @@
 # novo
 
-novo is a mobile-first waste-reduction system built around a physical plushie. The same Express and SQLite backend powers the React Native app and the supporting laptop/operations web portal.
+novo is a mobile-first waste-reduction system built around an NFC wristband and an expressive in-app animal mascot. The same Express and SQLite backend powers the React Native app and the supporting laptop/operations web portal.
 
 ## Included
 
 - Expo/React Native client for Android, iOS, and browser previews
-- Native NFC plushie pairing and daily interaction through `react-native-nfc-manager`
-- Staff/admin plushie NFC provisioning plus one-time physical accessory QR generation
-- Daily plushie-tap streaks and deterministic daily quest-board refreshes
-- Photo-backed custom tasks, optional YOLO verification, and staff moderation
+- App-wide Material 3 Expressive color roles generated from the user's equipped accessories, including harmonious multi-accessory palettes and contrast-aware foregrounds
+- Five wristband colours mapped to proportion-compatible 3D animal mascots: polar bear, penguin, fox, turtle and bird
+- Native NFC wristband pairing, daily touch and event attendance through `react-native-nfc-manager`
+- Staff/admin coloured-wristband provisioning and organizer attendance verification
+- Daily wristband-tap streaks and deterministic random quest-board refreshes
+- Camera-only photo tasks, SHA-256 fingerprints, optional model embeddings and YOLO-assisted staff moderation
 - Automatic awards only when the vision service returns an accepted result at 80% confidence or higher
 - Connected-friends lists and private invite links
 - GPS-aware full-screen task map, event registration, and shared evidence overlays
-- Configurable local reminders for plushie greetings, tasks, events, friends, and orders
+- Configurable local reminders for wristband greetings, tasks, events, friends, and rewards
 - Verified Singapore Pick!, SingPost POPStation, and Return Right map data
-- Marketplace fulfillment using real Pick!/SingPost locker choices; purchased accessories stay locked until their physical QR is paired
+- Wristband collection during onboarding using the searchable Pick! and SingPost POPStation directory
+- An all-digital marketplace with instant mascot accessories, account-bound coupons and charitable contributions
 - Organizer events and attendance, staff reviews/market management, and admin accounts
 - SQLite persistence and a deliberate database-reset command
+- Persistent member and Operations sessions that survive server restarts, with expiry cleanup and server-side sign-out revocation
 
 ## Start the system
 
@@ -41,19 +45,53 @@ npm run dev:web
 
 Open `http://localhost:4000`. Port 8081 is the Expo browser preview; port 4000 is the shared web portal and API.
 
-## Build an installable Android APK
+## Build installable Android and iOS apps
 
-The build script supports a local Android toolchain or EAS cloud build:
+Choose the target directly in the command; there is no machine-specific configuration file to maintain:
 
 ```powershell
-npm run build:apk -- -ApiUrl http://YOUR_COMPUTER_LAN_IP:4000/api
+# Keep this running in its own terminal while testing the APK
+npm run start:server
+
+# Local Android development using this computer's current IP
+npm run build:android:development
+
+# Local-network iPhone development through EAS internal distribution
+npm run build:ios:development
+
+# Build both development targets (local Android, then cloud iOS)
+npm run build:mobile:development -- -Platform All
+
+# Locally installable Android beta and EAS iOS beta testing
+npm run build:android:beta
+npm run build:ios:beta
+
+# Build local Android first, then the EAS iOS beta
+npm run build:mobile:beta -- -Platform All
+
+# Production against novo.tancheetiong.com
+npm run build:android:production
+npm run build:ios:production
 ```
 
-- Local mode requires Android Studio, its bundled JDK, and the Android SDK. A successful local build is copied to `artifacts/novo-android.apk`.
-- The Android build uses JDK 17. If Android Studio bundles a newer incompatible runtime, download JDK 17 from **Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK → Download JDK**, or pass `-JavaHome 'C:\path\to\jdk-17'`. The script detects incompatible Java versions before Gradle starts.
-- If those tools are unavailable, Auto mode uses the EAS `preview` profile and may ask you to sign in to Expo. The profile produces an APK, not an AAB. Configure `EXPO_PUBLIC_API_URL` in the EAS preview environment before the cloud build; the local `-ApiUrl` argument is not uploaded as an EAS secret.
-- Force a mode with `-Mode Local` or `-Mode Cloud`.
-- The API URL is compiled into the standalone app. Your phone and computer must be on the same network for a local HTTP server; use HTTPS for deployed builds.
+The older `build:apk:*` commands remain as Android aliases. The general command accepts `-Platform Android`, `-Platform iOS`, or `-Platform All`; development is the default environment and Android is the default platform.
+
+- **Development** discovers the current active private Wi-Fi/Ethernet IPv4 address at build time and normally embeds `http://CURRENT-IP:4000/api`. Keep `npm run start:server` running while building and using the APK. Before Gradle starts, the script verifies both the port listener and `CURRENT-IP:4000/api/health`. If a connected physical Android phone cannot reach the computer because the Wi-Fi uses client isolation—or because the phone is on cellular data—the script automatically creates an ADB USB tunnel, verifies it from the phone, and embeds `http://127.0.0.1:4000/api` instead. A tunneled development APK requires USB debugging to stay connected while the local API is in use. The artifact is `artifacts/novo-development.apk`.
+- **Beta** displays as **novo Beta** and embeds `https://novodev.tancheetiong.com/api`. Android builds locally with the generated development key—without EAS or production distribution signing—and produces the installable `artifacts/novo-beta.apk`. iOS Beta continues through EAS internal distribution because installable iOS apps require Apple signing.
+- **Production** always embeds `https://novo.tancheetiong.com/api`. Auto mode starts a signed EAS internal-distribution build using the `production-apk` profile, making it suitable for closed testing and direct installation.
+- The launcher title is **novo Development** for development builds, **novo Beta** for beta builds, and **novo** for production builds.
+- **iOS** uses an EAS cloud internal-distribution build from Windows because an installable iOS package requires macOS/Xcode and Apple signing. EAS may ask for an Expo login, Apple Developer credentials, and registration of test-device UDIDs. The resulting install link and IPA are supplied by EAS.
+- Preview a resolved target without building using `npm run build:mobile:development -- -Platform iOS -ShowConfig`, `npm run build:mobile:beta -- -Platform All -ShowConfig`, or `npm run build:mobile:production -- -Platform All -ShowConfig`.
+- Override unusual development networks with `-ApiUrl http://YOUR-IP:4000/api`. Beta and production overrides must use HTTPS.
+- `-SkipServerCheck` is available only for deliberate offline development builds; the API must still be running when the APK is used.
+- If a physical Android phone is connected through ADB, the script also checks the selected API URL from the phone itself. Run `npm run build:apk -- development -VerifyOnly` to perform all computer and device connectivity checks without building an APK.
+- Force a builder with `-Mode Local` or `-Mode Cloud`. Android development and beta default to the local toolchain and do not need EAS distribution signing; `-Mode Cloud` remains available when a signed Beta distribution is specifically wanted. iOS always requires cloud building on this Windows workflow. A forced local production Android build creates `artifacts/novo-production.apk`, but should be treated as a device smoke-test build unless you have separately configured production signing.
+- Local mode requires Android Studio, the Android SDK, and JDK 17–23. If needed, pass `-JavaHome 'C:\path\to\jdk-17'`.
+- The selected environment and API URL are compiled into the standalone app through Expo config, so a new APK is required when changing targets.
+- Local APK builds reject stale Gradle output, inspect the bundled API URL, and verify the copied file with SHA-256. The final timestamp and hash are printed after every successful build.
+- Local builds are incremental by default. Development targets only `arm64-v8a`, preserves Java/Kotlin/CMake/resource outputs, and regenerates only the JavaScript bundle that contains the selected API URL. Use `-CleanBuild` only to recover from corrupted native output, or override device targets with `-AndroidArchitectures 'arm64-v8a,x86_64'` when an emulator or additional ABI is required.
+
+For Google Play production, use the existing EAS `production` profile to create an Android App Bundle. The production APK profile is intended for closed testing and direct installation.
 
 Expo Go cannot load the NFC native module. Rebuild the APK whenever native dependencies or Expo config plugins change.
 
@@ -62,19 +100,19 @@ If an installed build reports a missing native Expo module, uninstall the old AP
 ## NFC lifecycle
 
 1. Configure a real staff or admin role using `NOVO_STAFF_EMAIL` or `NOVO_ADMIN_EMAIL` before starting the server.
-2. Sign in to Operations and open **Physical tags**.
-3. Create a tag record, then write the returned `novo://plushie/...` NDEF URL to the physical tag. Web NFC writing requires Chrome on an NFC-capable Android phone and a secure HTTPS context.
-4. In the installed novo app, a member scans that tag during pairing. The server binds that tag to one member and opens Home; pairing itself does not count as the daily greeting.
-5. Home immediately prompts a newly paired member to greet their plushie. That first intentional tap creates the first quest board and starts the streak at day one. Later daily taps must use the same paired tag and refresh quests while advancing or resetting the streak. Opening the app alone never changes the streak, and repeat taps on the same Singapore day do not inflate it.
+2. Sign in to Operations and open **Wristbands**.
+3. Create a coloured wristband record, then write the returned `novo://wristband/...` NDEF URL to its NFC tag. Web NFC writing requires Chrome on an NFC-capable Android phone and a secure HTTPS context.
+4. During onboarding, a member chooses a Pick! or POPStation collection point and scans the issued wristband. Its colour selects the matching in-app mascot and the server binds the tag to one member before opening Home.
+5. Home immediately prompts a newly paired member to touch the wristband. That first intentional touch creates the first random quest board and starts the streak at day one. Later daily touches must use the same paired wristband. Opening the app alone never changes the streak, and repeat touches on the same Singapore day do not inflate it.
 
 The server stores only a high-entropy public tag token in the NDEF payload. Pairing ownership and all streak decisions remain server-side.
 
-## Physical accessory lifecycle
+## Digital rewards lifecycle
 
-1. A member buys an accessory with leaves and chooses a pickup locker. The item immediately appears in the shared wardrobe as **Awaiting QR pairing**, but cannot be equipped yet.
-2. Staff or an administrator opens **Physical tags** in Operations, selects the matching accessory and generates its one-time QR code for printing and attachment.
-3. After pickup, the member scans that QR in the installed app. The API validates the order, accessory and unused physical tag, then permanently unlocks and equips the item.
-4. Used, mismatched, retired and unpurchased accessory codes are rejected server-side.
+1. Members spend leaves on digital accessories, coupons or charitable contributions.
+2. Digital accessories unlock immediately and use one shared rig across all five mascots; no shipping, locker selection or QR pairing is involved.
+3. Coupon redemptions create an account-bound code in the member profile. Charitable contributions remain separate verified transactions.
+4. Pick! and POPStation are used only to collect the physical wristband during onboarding.
 
 ## Operations role bootstrap
 
@@ -84,12 +122,20 @@ The database now starts without demo users or fake records. Set one or more envi
 $env:NOVO_ADMIN_EMAIL='admin@your-domain.sg'
 $env:NOVO_STAFF_EMAIL='staff@your-domain.sg'
 $env:NOVO_ORGANIZER_EMAIL='organizer@your-domain.sg'
+$env:NOVO_BOOTSTRAP_PASSWORD='replace-this-after-first-login'
 npm run dev:server
 ```
 
 Existing member accounts are created through app onboarding. Unknown email sign-ins are routed to onboarding instead of silently creating a filled demo profile.
 
-For Google sign-in, set the appropriate Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and allow the same IDs on the server with `GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, and `GOOGLE_WEB_CLIENT_ID` (or comma-separated `GOOGLE_CLIENT_IDS`). Without these credentials the app clearly disables the Google button instead of using a simulated account.
+For Google sign-in, set the Expo build variables (`EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`, `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`, and `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`) and the matching server variables (`GOOGLE_ANDROID_CLIENT_ID`, `GOOGLE_IOS_CLIENT_ID`, `GOOGLE_WEB_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`). For Discord, set `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`. For Microsoft, create a Microsoft Entra web app registration and set `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_SECRET`; `MICROSOFT_AUTHORITY_TENANT` defaults to `common` so work, school, and personal Microsoft accounts receive their real account identity instead of a tenant guest UPN. Configure each environment callback as `https://<environment-host>/api/auth/<provider>/callback`.
+
+The Microsoft registration should allow the account audience you want (use organizational and personal Microsoft accounts for broad sign-in support). Under **Authentication**, add these Web redirect URIs:
+
+- `https://novo.tancheetiong.com/api/auth/microsoft/callback`
+- `https://novodev.tancheetiong.com/api/auth/microsoft/callback`
+
+Create the secret under **Certificates & secrets** and store its value, not its secret ID. A separate Android or iOS Microsoft registration is not required because the novo server completes the OAuth exchange and then redirects back into the app.
 
 ## Vision review
 
@@ -99,11 +145,11 @@ Set `YOLO_SERVICE_URL` to an HTTP endpoint accepting:
 { "image": "data:image/jpeg;base64,...", "description": "..." }
 ```
 
-It must return `{ "confidence": 0.91, "label": "sorted recyclables", "accepted": true }`. novo auto-awards 50 leaves only when `accepted` is true and confidence is at least `0.8`. Timeouts, missing models, lower confidence, or rejection always create a pending staff review. Optionally set `YOLO_SERVICE_TOKEN` for bearer authentication.
+It can return `{ "confidence": 0.91, "label": "sorted recyclables", "accepted": true, "embedding": [0.12, 0.42] }`. novo fingerprints every camera image, rejects exact duplicates, compares optional embeddings for near-duplicates, and auto-awards leaves only when `accepted` is true and confidence is at least `0.8`. Timeouts, missing models, lower confidence, or rejection always create a pending staff review. Optionally set `YOLO_SERVICE_TOKEN` for bearer authentication.
 
 ## Location data
 
-The API includes verified real locations from SingPost/Pick! listings and the Return Right locator. Return Right availability can change during deployment or maintenance, so the API also returns the official live locator URL. Production should periodically import the providers’ authorized live feeds rather than treating the checked-in snapshot as real-time status.
+The wristband-pickup API imports the complete published Pick! and SingPost POPStation directories from their official locators, caches them for six hours, and supports name, address, postal-code and provider filtering. The Tasks map likewise imports every active Return Right machine published by Singapore's official recycling locator. If a provider is temporarily unreachable, its small verified fallback list remains available and the server retries shortly; machine availability can still change during deployment or maintenance.
 
 ## Database and checks
 
@@ -121,7 +167,7 @@ For a presentation-ready local dataset, stop the server and run:
 npm run demo
 ```
 
-This replaces the current database with connected demo members, role accounts, plushies and NFC tags, events, evidence reviews, marketplace inventory, orders, donations, quests, and friend activity. Every demo member receives 10,000 spendable leaves—more than the combined accessory catalogue price. Use password `novo2026` with any of these accounts:
+This replaces the current database with connected demo members, coloured wristbands and animal mascots, role accounts, events, evidence reviews, digital marketplace inventory, coupons, donations, quests, and friend activity. Every demo member receives 10,000 spendable leaves—more than the combined accessory catalogue price. Use password `novo2026` with any of these accounts:
 
 - `amira.tan@demo.novo.sg` — member
 - `organizer@demo.novo.sg` — organizer

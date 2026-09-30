@@ -21,7 +21,7 @@ export async function syncNotificationSchedule(preferences: NotificationPreferen
     content: { title, body, data },
     trigger: { type: Notifications.SchedulableTriggerInputTypes.DAILY, hour, minute, channelId: CHANNEL_ID },
   });
-  if (preferences.dailyGreeting) await scheduleDaily(9, 0, 'Your plushie is ready to say hello', 'Tap the novo patch to protect your streak and refresh today’s quests.', { destination: 'home' });
+  if (preferences.dailyGreeting) await scheduleDaily(9, 0, 'Your wristband is ready', 'Tap it with novo to protect your streak and refresh today’s quests.', { destination: 'home' });
   if (preferences.tasks) await scheduleDaily(18, 0, 'A small action still fits today', 'Open your quest board and submit evidence before the day ends.', { destination: 'tasks' });
   if (preferences.events) await scheduleDaily(12, 30, 'See what’s happening nearby', 'Check novo for live and scheduled community events.', { destination: 'tasks' });
   return true;

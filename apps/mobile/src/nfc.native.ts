@@ -1,9 +1,10 @@
 import NfcManager, { Ndef, NfcEvents, NfcTech, TagEvent } from 'react-native-nfc-manager';
+import { Platform } from 'react-native';
 
 export class NfcUnavailableError extends Error {}
 
 function tokenFromValue(value: string) {
-  const match = value.trim().match(/(?:novo:\/\/plushie\/|https:\/\/[^/]+\/nfc\/)([A-Za-z0-9_-]{24,200})/i);
+  const match = value.trim().match(/(?:novo:\/\/wristband\/|https:\/\/[^/]+\/nfc\/)([A-Za-z0-9_-]{24,200})/i);
   return match?.[1] ?? null;
 }
 
@@ -24,12 +25,37 @@ function tokenFromTag(tag: TagEvent | null) {
 }
 
 async function prepareNfc() {
-  if (!(await NfcManager.isSupported())) throw new NfcUnavailableError('This phone does not support NFC.');
-  await NfcManager.start();
-  if (!(await NfcManager.isEnabled())) throw new NfcUnavailableError('Turn on NFC in your phone settings to greet your plushie.');
+  try {
+    await NfcManager.start();
+  } catch (error) {
+    throw normalizeNfcError(error);
+  }
+  const supported = await NfcManager.isSupported().catch(() => false);
+  if (!supported) {
+    if (Platform.OS === 'ios') {
+      throw new NfcUnavailableError('Core NFC is unavailable to this installed copy of novo. Reinstall the latest IPA and ensure your signer keeps the NFC Tag Reading entitlement.');
+    }
+    throw new NfcUnavailableError('This phone does not support NFC tag reading.');
+  }
+  if (Platform.OS === 'android' && !(await NfcManager.isEnabled())) {
+    throw new NfcUnavailableError('Turn on NFC in your phone settings to tap your novo wristband.');
+  }
 }
 
-export async function startNovoPlushieListener(onToken: (token: string) => void, onInvalidTag?: () => void) {
+function normalizeNfcError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  if (/entitlement|missing required entitlement|security violation/i.test(message)) {
+    return new NfcUnavailableError('This installed copy cannot access Core NFC. Reinstall the latest novo IPA with a signer that preserves the NFC Tag Reading entitlement.');
+  }
+  if (/not support|unsupported|readingavailable/i.test(message)) {
+    return Platform.OS === 'ios'
+      ? new NfcUnavailableError('Core NFC is unavailable to this installed copy of novo. Reinstall the latest IPA and ensure your signer keeps the NFC Tag Reading entitlement.')
+      : new NfcUnavailableError('This phone does not support NFC tag reading.');
+  }
+  return error instanceof Error ? error : new Error('NFC could not start. Try again with novo open and your phone unlocked.');
+}
+
+export async function startNovoWristbandListener(onToken: (token: string) => void, onInvalidTag?: () => void) {
   await prepareNfc();
   let active = true;
   let lastToken = '';
@@ -48,10 +74,10 @@ export async function startNovoPlushieListener(onToken: (token: string) => void,
     onToken(token);
   });
   try {
-    await NfcManager.registerTagEvent({ alertMessage: 'Bring your phone near the novo patch.', invalidateAfterFirstRead: false });
+    await NfcManager.registerTagEvent({ alertMessage: 'Bring your novo wristband near your phone.', invalidateAfterFirstRead: false });
   } catch (error) {
     NfcManager.setEventListener(NfcEvents.DiscoverTag, null);
-    throw error;
+    throw normalizeNfcError(error);
   }
   return async () => {
     active = false;
@@ -60,13 +86,15 @@ export async function startNovoPlushieListener(onToken: (token: string) => void,
   };
 }
 
-export async function scanNovoPlushieTag() {
+export async function scanNovoWristbandTag() {
   await prepareNfc();
   try {
-    await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Hold your phone near the novo patch.' });
+    await NfcManager.requestTechnology(NfcTech.Ndef, { alertMessage: 'Hold your novo wristband near your phone.' });
     const token = tokenFromTag(await NfcManager.getTag());
     if (token) return token;
-    throw new Error('This NFC tag is not a prepared novo plushie tag.');
+    throw new Error('This NFC tag is not a prepared novo wristband.');
+  } catch (error) {
+    throw normalizeNfcError(error);
   } finally {
     await NfcManager.cancelTechnologyRequest().catch(() => undefined);
   }

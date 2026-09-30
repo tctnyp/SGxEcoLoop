@@ -1,19 +1,77 @@
 {
   "cli": {
-    "version": ">= 12.0.0"
+    "version": ">= 12.0.0",
+    "appVersionSource": "local"
   },
   "build": {
-    "preview": {
+    "development-android": {
       "distribution": "internal",
       "env": {
+        "NOVO_BUILD_ENV": "development",
         "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
       },
       "android": {
         "buildType": "apk"
       }
     },
-    "production": {
+    "development-ios": {
+      "distribution": "internal",
       "env": {
+        "NOVO_BUILD_ENV": "development",
+        "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "beta-android": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "NOVO_BUILD_ENV": "beta",
+        "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "beta-ios": {
+      "distribution": "internal",
+      "environment": "preview",
+      "env": {
+        "NOVO_BUILD_ENV": "beta",
+        "EXPO_PUBLIC_API_URL": "https://novodev.tancheetiong.com/api"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "production-apk": {
+      "distribution": "internal",
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    },
+    "production-ios": {
+      "distribution": "internal",
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+    "production": {
+      "environment": "production",
+      "env": {
+        "NOVO_BUILD_ENV": "production",
         "EXPO_PUBLIC_API_URL": "https://novo.tancheetiong.com/api"
       },
       "android": {

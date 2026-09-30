@@ -1,44 +1,60 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Linking, Platform, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as WebBrowser from 'expo-web-browser';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
+  ApiError,
   addFriend,
+  completeMemberOnboarding,
   contributePoints,
   deleteMemberAccount,
   equipAccessory,
   exchangeMobileHandoff,
-  getMemberProfile,
-  interactWithPlushie,
-  pairPlushie,
+  interactWithWristband,
+  pairWristband,
   purchaseAccessory,
-  redeemAccessory,
+  reserveWristbandPickup,
+  redeemCoupon,
+  getWristbandPickupLocations,
+  revokeSession,
   restoreMobileSession,
+  setAccountStatusListener,
+  startLinkedAccount,
+  updateMemberProfile,
+  changeMemberPassword,
   updateNotificationPreferences,
-  unpairPlushie,
+  unpairWristband,
 } from './src/api';
+import { AppErrorBoundary } from './src/components/AppErrorBoundary';
 import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
-import { AccessoryScanScreen } from './src/screens/AccessoryScanScreen';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
-import { PairPlushieScreen } from './src/screens/PairPlushieScreen';
+import { PairWristbandScreen } from './src/screens/PairWristbandScreen';
 import { SignInScreen } from './src/screens/SignInScreen';
-import { AccessoryId, AuthResult, Screen, User } from './src/types';
+import { TutorialScreen } from './src/screens/TutorialScreen';
+import { AccessoryId, AccountStatus, AuthResult, OAuthProvider, Screen, User } from './src/types';
 import { colors } from './src/theme';
 
 const SESSION_KEY = 'novo-mobile-session';
+const LAST_PROFILE_KEY = 'novo-last-profile';
 const profileKey = (email: string) => `novo-profile:${email.toLowerCase()}`;
 
-export default function App() {
+function NovoApp() {
   const [fontsLoaded] = useFonts({ GoogleSansFlex: require('./assets/fonts/GoogleSansFlex-Regular.ttf') });
   const [screen, setScreen] = useState<Screen>('signin');
   const [user, setUser] = useState<User | null>(null);
-  const [draft, setDraft] = useState<{ name: string; email: string }>();
+  const [draft, setDraft] = useState<AuthResult['draft']>();
   const [booting, setBooting] = useState(true);
+  const [accountStatus, setAccountStatus] = useState<AccountStatus>('active');
+  const [checkingAccess, setCheckingAccess] = useState(false);
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
+  const screenRef = useRef<Screen>('signin');
+
+  useEffect(() => { screenRef.current = screen; }, [screen]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof document === 'undefined') return undefined;
@@ -73,13 +89,16 @@ export default function App() {
 
   const saveUser = async (nextUser: User) => {
     setUser(nextUser);
-    await AsyncStorage.setItem(profileKey(nextUser.email), JSON.stringify(nextUser));
+    const serialized = JSON.stringify(nextUser);
+    await AsyncStorage.multiSet([[profileKey(nextUser.email), serialized], [LAST_PROFILE_KEY, serialized]]);
   };
 
   const routeUser = async (nextUser: User) => {
     await saveUser(nextUser);
     void syncNotificationSchedule(nextUser.notificationPreferences).catch(() => undefined);
-    setScreen(nextUser.plushiePaired ? 'home' : 'pair-plushie');
+    if (!nextUser.wristbandPaired) setScreen('pair-wristband');
+    else if (nextUser.onboardingCompleted === false) setScreen('tutorial');
+    else setScreen('home');
   };
 
   const rememberSession = async (token: string) => {
@@ -87,11 +106,15 @@ export default function App() {
     await AsyncStorage.setItem(SESSION_KEY, token);
   };
 
-  const clearSession = async () => {
+  const clearSession = async (revokeOnServer = true) => {
+    const token = tokenRef.current ?? await AsyncStorage.getItem(SESSION_KEY);
+    if (revokeOnServer && token) await revokeSession(token).catch(() => undefined);
+    const activeUser = user;
     tokenRef.current = null;
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await AsyncStorage.multiRemove([SESSION_KEY, LAST_PROFILE_KEY, ...(activeUser ? [profileKey(activeUser.email)] : [])]);
     setUser(null);
     setDraft(undefined);
+    setAccountStatus('active');
     setScreen('signin');
   };
 
@@ -103,9 +126,15 @@ export default function App() {
     }
 
     if (!result.user || !result.token) throw new Error('The server did not return a complete novo session.');
+    setAccountStatus(result.accountStatus ?? 'active');
     await rememberSession(result.token);
     await routeUser(result.user);
   };
+
+  useEffect(() => setAccountStatusListener((status) => {
+    setAccountStatus(status);
+    if (status === 'suspended' && tokenRef.current) setScreen('account-status');
+  }), []);
 
   useEffect(() => {
     let mounted = true;
@@ -121,8 +150,10 @@ export default function App() {
 
     const captureFriendInvite = (url: string | null) => {
       if (!url) return null;
-      const match = url.match(/^novo:\/\/friends\/add\?(?:[^#]*&)?user=([^&#]+)/);
-      const friendId = match?.[1] ? decodeURIComponent(match[1]) : null;
+      const deepLinkMatch = url.match(/^novo:\/\/friends\/add\?(?:[^#]*&)?user=([^&#]+)/);
+      const webLinkMatch = url.match(/^https?:\/\/[^/]+\/invite\/([^/?#]+)/);
+      const encodedFriendId = deepLinkMatch?.[1] ?? webLinkMatch?.[1];
+      const friendId = encodedFriendId ? decodeURIComponent(encodedFriendId) : null;
       if (friendId) pendingFriendRef.current = friendId;
       return friendId;
     };
@@ -144,13 +175,34 @@ export default function App() {
 
         const storedToken = await AsyncStorage.getItem(SESSION_KEY);
         if (!storedToken) return;
-        const result = await restoreMobileSession(storedToken);
-        if (!result.user) throw new Error('Profile missing from session.');
-        await rememberSession(storedToken);
-        await routeUser(result.user);
-        await acceptPendingFriend();
+        try {
+          const result = await restoreMobileSession(storedToken);
+          if (!result.user) throw new Error('Profile missing from session.');
+          setAccountStatus(result.accountStatus ?? 'active');
+          await rememberSession(storedToken);
+          await routeUser(result.user);
+          await acceptPendingFriend();
+        } catch (error) {
+          if (error instanceof ApiError && error.accountStatus === 'suspended') {
+            const cachedProfile = await AsyncStorage.getItem(LAST_PROFILE_KEY);
+            if (cachedProfile) setUser(JSON.parse(cachedProfile) as User);
+            await rememberSession(storedToken);
+            setAccountStatus('suspended');
+            setScreen('account-status');
+            return;
+          }
+          if (error instanceof ApiError && error.status === 401) {
+            await clearSession(false);
+            return;
+          }
+          const cachedProfile = await AsyncStorage.getItem(LAST_PROFILE_KEY);
+          if (!cachedProfile) throw error;
+          const cachedUser = JSON.parse(cachedProfile) as User;
+          await rememberSession(storedToken);
+          await routeUser(cachedUser);
+        }
       } catch {
-        await clearSession();
+        await clearSession(false);
       } finally {
         if (mounted) setBooting(false);
       }
@@ -177,7 +229,12 @@ export default function App() {
       const token = tokenRef.current;
       if (state !== 'active' || !token) return;
       try {
-        await saveUser(await getMemberProfile(token));
+        const result = await restoreMobileSession(token);
+        setAccountStatus(result.accountStatus ?? 'active');
+        if (result.user) {
+          if (screenRef.current === 'home') await saveUser(result.user);
+          else await routeUser(result.user);
+        }
       } catch {
         // Keep the cached profile visible during a temporary connection loss.
       }
@@ -197,23 +254,47 @@ export default function App() {
 
   const handleProfileCreated = (result: AuthResult) => handleAuth(result);
 
-  const handlePairRequest = async (tagToken: string) => pairPlushie(requireToken(), tagToken);
+  const handleCheckAccess = async () => {
+    const token = tokenRef.current;
+    if (!token || checkingAccess) return;
+    setCheckingAccess(true);
+    try {
+      const result = await restoreMobileSession(token);
+      if (!result.user) throw new Error('Your profile could not be restored.');
+      setAccountStatus(result.accountStatus ?? 'active');
+      await routeUser(result.user);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.accountStatus === 'suspended')) {
+        Alert.alert('Could not check access', error instanceof Error ? error.message : 'Please try again.');
+      }
+    } finally {
+      setCheckingAccess(false);
+    }
+  };
 
-  const handlePlushieInteraction = async (tagToken: string) => {
-    const updated = await interactWithPlushie(requireToken(), tagToken);
+  const handlePairRequest = async (tagToken: string, pickupLocation: string) => pairWristband(requireToken(), tagToken, pickupLocation);
+  const handleLoadWristbandPickupLocations = useCallback((coordinates?: { latitude: number; longitude: number }) => getWristbandPickupLocations(requireToken(), coordinates), []);
+  const handleReserveWristbandPickup = async (pickupLocation: string) => {
+    const updated = await reserveWristbandPickup(requireToken(), pickupLocation);
+    await saveUser(updated);
+    return updated;
+  };
+
+  const handleWristbandInteraction = async (tagToken: string) => {
+    const updated = await interactWithWristband(requireToken(), tagToken);
     await saveUser(updated);
     return updated;
   };
 
   const handlePaired = async (pairedUser: User) => {
-    await saveUser(pairedUser);
-    setScreen('home');
+    await routeUser(pairedUser);
   };
 
-  const handleScanned = async (code: string) => {
-    const updated = await redeemAccessory(requireToken(), code);
+  const handleTutorialComplete = async (mascotName: string) => {
+    const updated = await completeMemberOnboarding(requireToken(), mascotName);
     await saveUser(updated);
     setScreen('home');
+    return updated;
   };
 
   const handleEquip = async (accessoryId: AccessoryId) => {
@@ -224,11 +305,13 @@ export default function App() {
     }
   };
 
-  const handlePurchase = async (accessoryId: AccessoryId, _cost: number, lockerLocation: string) => {
+  const handlePurchase = async (accessoryId: AccessoryId, _cost: number) => {
     try {
-      const updated = await purchaseAccessory(requireToken(), accessoryId, lockerLocation);
+      const updated = await purchaseAccessory(requireToken(), accessoryId);
       await saveUser(updated);
-      if (updated.notificationPreferences.orders) void sendLocalNotification('Accessory ordered', 'It is waiting in your wardrobe. Scan its physical QR code after pickup to enable it.', 'home');
+      if (updated.notificationPreferences.orders) {
+        void sendLocalNotification('Accessory unlocked', 'Your new in-app accessory is ready in the wardrobe.', 'home').catch(() => undefined);
+      }
     } catch (error) {
       showMutationError(error);
       throw error;
@@ -241,6 +324,30 @@ export default function App() {
     await saveUser(await updateNotificationPreferences(requireToken(), preferences));
   };
 
+  const handleUpdateProfile = async (input: { name: string; username: string; avatarDataUrl?: string | null }) => {
+    const updated = await updateMemberProfile(requireToken(), input);
+    await saveUser(updated);
+    return updated;
+  };
+
+  const handleChangePassword = (input: { currentPassword: string; newPassword: string }) => changeMemberPassword(requireToken(), input);
+
+  const handleLinkAccount = async (provider: OAuthProvider) => {
+    const authorizationUrl = await startLinkedAccount(requireToken(), provider);
+    const result = await WebBrowser.openAuthSessionAsync(authorizationUrl, 'novo://auth/oauth');
+    if (result.type !== 'success') throw new Error('Account linking was cancelled.');
+    const url = new URL(result.url);
+    const oauthError = url.searchParams.get('oauthError');
+    if (oauthError) throw new Error(oauthError);
+    const nextToken = url.searchParams.get('token');
+    if (!nextToken) throw new Error('The provider did not return a novo session.');
+    await rememberSession(nextToken);
+    const session = await restoreMobileSession(nextToken);
+    if (!session.user) throw new Error('The updated profile could not be loaded.');
+    await saveUser(session.user);
+    return session.user;
+  };
+
   const handleContribute = async (points: number, causeId: string, causeName: string) => {
     try {
       await saveUser(await contributePoints(requireToken(), points, causeId, causeName));
@@ -250,9 +357,18 @@ export default function App() {
     }
   };
 
+  const handleRedeemCoupon = async (points: number, offerId: string, name: string) => {
+    try {
+      await saveUser(await redeemCoupon(requireToken(), points, offerId, name));
+    } catch (error) {
+      showMutationError(error);
+      throw error;
+    }
+  };
+
   const handleUnpair = async () => {
     try {
-      await routeUser(await unpairPlushie(requireToken()));
+      await routeUser(await unpairWristband(requireToken()));
     } catch (error) {
       showMutationError(error);
     }
@@ -262,7 +378,7 @@ export default function App() {
     if (!user) return;
     try {
       await deleteMemberAccount(requireToken());
-      await AsyncStorage.multiRemove([SESSION_KEY, profileKey(user.email)]);
+      await AsyncStorage.multiRemove([SESSION_KEY, LAST_PROFILE_KEY, profileKey(user.email)]);
       tokenRef.current = null;
       setUser(null);
       setScreen('signin');
@@ -278,15 +394,39 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <StatusBar style="dark" />
-      {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => setScreen('onboarding')} />}
+      {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
+      {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => { setDraft(undefined); setScreen('onboarding'); }} />}
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
-      {screen === 'pair-plushie' && user && <PairPlushieScreen user={user} onPair={handlePairRequest} onPaired={handlePaired} onSignOut={clearSession} />}
-      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onPlushieTag={handlePlushieInteraction} onScanAccessory={() => setScreen('scan-accessory')} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
-      {screen === 'scan-accessory' && user && <AccessoryScanScreen onClose={() => setScreen('home')} onScanned={handleScanned} />}
+      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
+      {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
+      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
+      {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}
     </SafeAreaProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <NovoApp />
+    </AppErrorBoundary>
   );
 }
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
+  limitedBanner: { paddingHorizontal: 18, paddingBottom: 12, backgroundColor: '#FFF2C7', borderBottomWidth: 1, borderBottomColor: '#E2C66F' },
+  limitedTitle: { color: '#5D4300', fontFamily: 'GoogleSansFlex', fontSize: 15, fontWeight: '700' },
+  limitedCopy: { marginTop: 2, color: '#725A18', fontFamily: 'GoogleSansFlex', fontSize: 12, lineHeight: 16 },
+  statusScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: colors.cream },
+  statusCard: { width: '100%', maxWidth: 440, padding: 28, borderRadius: 32, backgroundColor: '#FFFFFF', shadowColor: '#17352A', shadowOpacity: 0.12, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 6 },
+  statusIcon: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: '#FFE1DE' },
+  statusIconText: { color: '#A9342B', fontFamily: 'GoogleSansFlex', fontSize: 30, fontWeight: '800' },
+  statusEyebrow: { marginTop: 22, color: '#A9342B', fontFamily: 'GoogleSansFlex', fontSize: 12, fontWeight: '800', letterSpacing: 1.4 },
+  statusTitle: { marginTop: 8, color: colors.forest, fontFamily: 'GoogleSansFlex', fontSize: 28, fontWeight: '700' },
+  statusCopy: { marginTop: 12, marginBottom: 24, color: '#5E6F67', fontFamily: 'GoogleSansFlex', fontSize: 15, lineHeight: 22 },
+  primaryButton: { minHeight: 54, alignItems: 'center', justifyContent: 'center', borderRadius: 17, backgroundColor: colors.forest },
+  primaryButtonText: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 16, fontWeight: '700' },
+  secondaryButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  secondaryButtonText: { color: colors.forest, fontFamily: 'GoogleSansFlex', fontSize: 15, fontWeight: '700' },
 });

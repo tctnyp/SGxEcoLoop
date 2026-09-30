@@ -3,7 +3,7 @@
     "name": "novo",
     "slug": "novo",
     "scheme": "novo",
-    "version": "1.0.5",
+    "version": "1.1.19",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -15,12 +15,17 @@
     },
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "27",
       "icon": "./assets/icon.png",
-      "bundleIdentifier": "com.novo.ecoloop"
+      "bundleIdentifier": "com.novo.ecoloop",
+      "associatedDomains": [
+        "applinks:novo.tancheetiong.com",
+        "applinks:novodev.tancheetiong.com"
+      ]
     },
     "android": {
       "package": "com.novo.ecoloop",
-      "versionCode": 7,
+      "versionCode": 27,
       "permissions": [
         "android.permission.NFC",
         "android.permission.CAMERA",
@@ -31,13 +36,24 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#17352A"
-      }
+      },
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": false,
+          "data": [
+            { "scheme": "https", "host": "novo.tancheetiong.com", "pathPrefix": "/invite/" },
+            { "scheme": "https", "host": "novodev.tancheetiong.com", "pathPrefix": "/invite/" }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
+      ]
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Novo to scan the QR code on your plushie accessory."
+          "cameraPermission": "Allow novo to photograph task evidence and scan in-app reward codes."
         }
       ],
       "expo-asset",
@@ -51,14 +67,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow novo to attach evidence to your custom task.",
+          "photosPermission": "novo only uses photos captured inside the app for task evidence.",
           "cameraPermission": "Allow novo to photograph evidence for your custom task."
         }
       ],
       [
         "react-native-nfc-manager",
         {
-          "nfcPermission": "Allow novo to pair and interact with your plushie."
+          "nfcPermission": "Allow novo to pair and interact with your wristband.",
+          "includeNdefEntitlement": false
         }
       ],
       "./plugins/withAndroidCleartext",

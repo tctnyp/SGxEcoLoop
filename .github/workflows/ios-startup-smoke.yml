@@ -1,0 +1,113 @@
+name: iOS Startup Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    name: Launch release bundle
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      NOVO_BUILD_ENV: development
+      EXPO_PUBLIC_API_URL: https://novodev.tancheetiong.com/api
+      EXPO_PUBLIC_IOS_SMOKE: '1'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate iOS project
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform ios --no-install --clean
+
+      - name: Install CocoaPods
+        working-directory: apps/mobile/ios
+        run: pod install --repo-update
+
+      - name: Build release app for Simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(find apps/mobile/ios -maxdepth 1 -name '*.xcworkspace' -type d -print -quit)"
+          test -n "$workspace"
+          scheme="$(basename "$workspace" .xcworkspace)"
+          xcodebuild \
+            -workspace "$workspace" \
+            -scheme "$scheme" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/novo-simulator-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Launch app and capture startup diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$(find "$RUNNER_TEMP/novo-simulator-derived/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -type d -print -quit)"
+          test -n "$app_path"
+          device="$(xcrun simctl list devices available --json | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(device["udid"] for runtime in data["devices"].values() for device in runtime if "iPad" in device["name"]))')"
+          xcrun simctl boot "$device"
+          open -a Simulator --args -CurrentDeviceUDID "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" "$app_path"
+
+          log_file="$RUNNER_TEMP/novo-startup.log"
+          console_file="$RUNNER_TEMP/novo-console.log"
+          launch_pid=''
+          xcrun simctl spawn "$device" log stream \
+            --style compact \
+            --level debug \
+            --predicate 'process == "novoDevelopment" OR composedMessage CONTAINS[c] "Unhandled JS Exception" OR composedMessage CONTAINS[c] "ReactNativeJS"' \
+            >"$log_file" 2>&1 &
+          log_pid=$!
+          trap 'kill "$log_pid" 2>/dev/null || true; test -z "${launch_pid:-}" || kill "$launch_pid" 2>/dev/null || true; xcrun simctl shutdown "$device" 2>/dev/null || true' EXIT
+
+          xcrun simctl launch --terminate-running-process --console-pty "$device" com.novo.ecoloop >"$console_file" 2>&1 &
+          launch_pid=$!
+          sleep 12
+          if ! kill -0 "$launch_pid" 2>/dev/null; then
+            wait "$launch_pid" || true
+            cat "$console_file"
+            cat "$log_file"
+            echo 'novo exited during startup.' >&2
+            exit 1
+          fi
+          if {
+            sed '/^Filtering the log data using /d' "$log_file"
+            cat "$console_file"
+          } | grep -Eqi 'Unhandled JS Exception|RCTFatal|Cannot find native module|Invariant Violation|TypeError:|ReferenceError:|Text strings must be rendered'; then
+            cat "$log_file"
+            echo 'novo emitted a fatal startup error.' >&2
+            exit 1
+          fi
+          cat "$console_file"
+          cat "$log_file"
+
+      - name: Upload startup log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-startup-log
+          path: |
+            ${{ runner.temp }}/novo-startup.log
+            ${{ runner.temp }}/novo-console.log
+          if-no-files-found: warn

@@ -8,7 +8,7 @@ type Props = { size?: 'small' | 'large'; mood?: 'happy' | 'proud'; accessory?: A
 export function Plushie({ size = 'large', mood = 'happy', accessory }: Props) {
   const small = size === 'small';
   return (
-    <View style={[styles.wrap, small && styles.wrapSmall]} accessibilityLabel="A friendly green novo plushie">
+    <View style={[styles.wrap, small && styles.wrapSmall]} accessibilityLabel="A friendly in-app Novo animal mascot">
       <View style={[styles.ear, styles.earLeft, small && styles.earSmall]} />
       <View style={[styles.ear, styles.earRight, small && styles.earSmall]} />
       {accessory && <AccessoryAdornment id={accessory} small={small} />}

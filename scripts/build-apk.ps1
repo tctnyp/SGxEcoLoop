@@ -1,14 +1,71 @@
 param(
+  [Parameter(Position = 0)]
+  [ValidateSet('Development', 'Beta', 'Production')]
+  [string]$Environment = 'Development',
+
+  [Parameter(Position = 1)]
   [ValidateSet('Auto', 'Local', 'Cloud')]
   [string]$Mode = 'Auto',
-  [string]$ApiUrl = $env:EXPO_PUBLIC_API_URL,
-  [string]$JavaHome = $env:NOVO_JAVA_HOME
+
+  [ValidateSet('Android', 'iOS', 'All')]
+  [string]$Platform = 'Android',
+
+  [string]$ApiUrl,
+  [int]$ServerPort = 4000,
+  [string]$JavaHome = $env:NOVO_JAVA_HOME,
+  [string]$AndroidArchitectures,
+  [switch]$CleanBuild,
+  [switch]$SkipServerCheck,
+  [switch]$VerifyOnly,
+  [switch]$ShowConfig
 )
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $mobileRoot = Join-Path $repoRoot 'apps\mobile'
 $artifactRoot = Join-Path $repoRoot 'artifacts'
+$productionApiUrl = 'https://novo.tancheetiong.com/api'
+$betaApiUrl = 'https://novodev.tancheetiong.com/api'
+
+function Get-PrivateAddressRank([string]$Address) {
+  if ($Address -match '^192\.168\.') { return 0 }
+  if ($Address -match '^10\.') { return 1 }
+  if ($Address -match '^172\.(1[6-9]|2\d|3[01])\.') { return 2 }
+  return 10
+}
+
+function Get-CurrentLanAddress {
+  $candidates = foreach ($adapter in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+    if ($adapter.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+    $adapterName = "$($adapter.Name) $($adapter.Description)"
+    if ($adapterName -match 'Loopback|Bluetooth|Virtual|Hyper-V|VMware|VirtualBox|WSL|Tailscale|VPN') { continue }
+
+    $properties = $adapter.GetIPProperties()
+    $hasGateway = @($properties.GatewayAddresses | Where-Object { $_.Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }).Count -gt 0
+    foreach ($address in $properties.UnicastAddresses) {
+      if ($address.Address.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { continue }
+      $ip = [string]$address.Address
+      if (-not $ip -or $ip -match '^(127\.|169\.254\.)') { continue }
+      [pscustomobject]@{
+        Address = $ip
+        PrivateRank = Get-PrivateAddressRank $ip
+        HasGateway = if ($hasGateway) { 0 } else { 1 }
+        AdapterRank = if ($adapterName -match 'Wi-?Fi|Wireless|WLAN') { 0 } elseif ($adapterName -match 'Ethernet') { 1 } else { 2 }
+        Interface = $adapter.Name
+      }
+    }
+  }
+
+  $selected = $candidates |
+    Where-Object { $_.PrivateRank -lt 10 } |
+    Sort-Object HasGateway, AdapterRank, PrivateRank, Interface |
+    Select-Object -First 1
+
+  if (-not $selected) {
+    throw 'No active private Wi-Fi or Ethernet IPv4 address was found. Connect this computer and phone to the same network, or pass -ApiUrl explicitly.'
+  }
+  return $selected
+}
 
 function Get-JavaMajorVersion([string]$HomePath) {
   if (-not $HomePath) { return $null }
@@ -28,6 +85,47 @@ function Get-JavaMajorVersion([string]$HomePath) {
   $process.Dispose()
   if ($versionText -match 'version\s+"(?<major>\d+)') { return [int]$Matches.major }
   return $null
+}
+
+function Get-Sha256Hash([string]$FilePath) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($FilePath)
+  try {
+    return ([System.BitConverter]::ToString($sha256.ComputeHash($stream))).Replace('-', '')
+  } finally {
+    $stream.Dispose()
+    $sha256.Dispose()
+  }
+}
+
+function Invoke-NativeCapture([string]$FilePath, [string[]]$Arguments) {
+  # Windows PowerShell converts native stderr into ErrorRecord objects when
+  # ErrorActionPreference is Stop. Temporarily relax it so adb failures can be
+  # inspected and handled instead of aborting the whole build unexpectedly.
+  $previousErrorActionPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = @(& $FilePath @Arguments 2>&1)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+  }
+  return [pscustomobject]@{
+    ExitCode = $exitCode
+    Output = ($output | ForEach-Object { "$_" }) -join "`n"
+  }
+}
+
+function Remove-SafeGeneratedPath([string]$Path, [string]$AllowedRoot) {
+  $fullPath = [System.IO.Path]::GetFullPath($Path)
+  $fullAllowedRoot = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd('\', '/')
+  $allowedPrefix = "$fullAllowedRoot$([System.IO.Path]::DirectorySeparatorChar)"
+  if (-not $fullPath.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to remove generated path outside $fullAllowedRoot`: $fullPath"
+  }
+  if (Test-Path -LiteralPath $fullPath) {
+    Remove-Item -LiteralPath $fullPath -Recurse -Force
+  }
 }
 
 function Find-CompatibleJavaHome {
@@ -64,64 +162,278 @@ function Find-CompatibleJavaHome {
   return $compatible | Sort-Object @{ Expression = { if ($_.Major -eq 17) { 0 } elseif ($_.Major -eq 21) { 1 } else { 2 } } }, Major | Select-Object -First 1
 }
 
+$environmentName = $Environment.ToLowerInvariant()
+$detectedNetwork = $null
 if (-not $ApiUrl) {
-  throw 'Set EXPO_PUBLIC_API_URL or pass -ApiUrl http://YOUR_COMPUTER_LAN_IP:4000/api so the APK can reach the novo server from your phone.'
+  switch ($Environment) {
+    'Production' { $ApiUrl = $productionApiUrl }
+    'Beta' { $ApiUrl = $betaApiUrl }
+    default {
+      $detectedNetwork = Get-CurrentLanAddress
+      $ApiUrl = "http://$($detectedNetwork.Address):$ServerPort/api"
+    }
+  }
 }
 
-$env:EXPO_PUBLIC_API_URL = $ApiUrl.TrimEnd('/')
-New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+$ApiUrl = $ApiUrl.TrimEnd('/')
+if ($ApiUrl -notmatch '^https?://[^\s]+/api$') {
+  throw "Invalid API URL '$ApiUrl'. Expected an HTTP(S) URL ending in /api."
+}
+if ($Environment -in @('Beta', 'Production') -and $ApiUrl -notmatch '^https://') {
+  throw "$Environment builds require an HTTPS API URL."
+}
+
+$env:NOVO_BUILD_ENV = $environmentName
+$env:EXPO_PUBLIC_API_URL = $ApiUrl
+
+$buildAndroid = $Platform -in @('Android', 'All')
+$buildIos = $Platform -in @('iOS', 'All')
+$androidMode = if ($Mode -eq 'Auto') { if ($Environment -in @('Development', 'Beta')) { 'Local' } else { 'Cloud' } } else { $Mode }
+$iosMode = if ($Mode -eq 'Auto') { 'Cloud' } else { $Mode }
+$AndroidArchitectures = if ($AndroidArchitectures) { $AndroidArchitectures.Trim() } elseif ($Environment -eq 'Development') { 'arm64-v8a' } else { 'armeabi-v7a,arm64-v8a,x86,x86_64' }
+$validAndroidArchitectures = @('armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64')
+foreach ($architecture in ($AndroidArchitectures -split ',')) {
+  if ($architecture.Trim() -notin $validAndroidArchitectures) {
+    throw "Unsupported Android architecture '$architecture'. Use one or more of: $($validAndroidArchitectures -join ', ')."
+  }
+}
+if ($buildIos -and $iosMode -eq 'Local') {
+  throw 'Local iOS app packaging requires macOS and Xcode. From Windows, use -Mode Cloud (or Auto) so EAS can create the installable iOS build.'
+}
+if ($buildAndroid -and $Environment -eq 'Development' -and $androidMode -eq 'Cloud') {
+  throw 'Development Android builds use this computer''s current LAN address and must be built locally. Use -Mode Local or Auto for Android.'
+}
+
+function Write-ResolvedConfiguration {
+  Write-Host "Build environment: $environmentName"
+  Write-Host "App title: $(if ($Environment -eq 'Development') { 'novo Development' } elseif ($Environment -eq 'Beta') { 'novo Beta' } else { 'novo' })"
+  Write-Host "Embedded API URL: $ApiUrl"
+  Write-Host "Requested platform: $($Platform.ToLowerInvariant())"
+  if ($buildAndroid) { Write-Host "Android builder: $($androidMode.ToLowerInvariant())" }
+  if ($buildAndroid) { Write-Host "Android signing: $(if ($androidMode -eq 'Local') { 'local development key' } else { 'EAS distribution credentials' })" }
+  if ($buildAndroid -and $androidMode -eq 'Local') { Write-Host "Android architectures: $AndroidArchitectures" }
+  if ($buildAndroid -and $androidMode -eq 'Local') { Write-Host "Build strategy: $(if ($CleanBuild) { 'clean' } else { 'incremental' })" }
+  if ($buildIos) { Write-Host "iOS builder: $($iosMode.ToLowerInvariant())" }
+  if ($detectedNetwork) { Write-Host "Detected adapter: $($detectedNetwork.Interface) ($($detectedNetwork.Address))" }
+}
+
+if ($ShowConfig) {
+  Write-ResolvedConfiguration
+  exit 0
+}
+
+$androidSdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
+if ($Environment -eq 'Development' -and -not $SkipServerCheck) {
+  $serverIsListening = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+    Where-Object { $_.Port -eq $ServerPort } |
+    Select-Object -First 1
+  if (-not $serverIsListening) {
+    throw "The development API is not running on port $ServerPort. Start it in another terminal with 'npm run start:server', leave that terminal open, and build again."
+  }
+
+  try {
+    $health = Invoke-RestMethod -Method Get -Uri "$ApiUrl/health" -TimeoutSec 5
+    if (-not $health.ok) { throw 'The health endpoint did not return ok=true.' }
+    Write-Host "Development API health check: reachable ($ApiUrl/health)"
+  } catch {
+    throw "The development API is listening locally but cannot be reached through $ApiUrl. Check the selected network adapter and Windows Firewall, or pass -ApiUrl explicitly. $($_.Exception.Message)"
+  }
+
+  $adbExe = Join-Path $androidSdk 'platform-tools\adb.exe'
+  if ($buildAndroid -and (Test-Path -LiteralPath $adbExe)) {
+    $adbDevices = Invoke-NativeCapture $adbExe @('devices')
+    $physicalDevices = foreach ($line in ($adbDevices.Output -split "`r?`n")) {
+      if ($line -match '^([^\s]+)\s+device$' -and $Matches[1] -notmatch '^emulator-') { $Matches[1] }
+    }
+    $lanUnavailableFromDevice = $false
+    foreach ($serial in $physicalDevices) {
+      $curlLookup = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'command -v curl')
+      if ($curlLookup.ExitCode -ne 0 -or -not $curlLookup.Output.Trim()) {
+        Write-Warning "Android device $serial is connected, but it does not provide curl; device-side API verification was skipped."
+        continue
+      }
+      $deviceHealth = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'curl', '--silent', '--show-error', '--connect-timeout', '5', '--max-time', '8', "$ApiUrl/health")
+      if ($deviceHealth.ExitCode -ne 0 -or $deviceHealth.Output -notmatch '"ok"\s*:\s*true') {
+        $lanUnavailableFromDevice = $true
+        Write-Warning "Android device $serial cannot reach $ApiUrl over the local network. Device response: $($deviceHealth.Output)"
+        continue
+      }
+      Write-Host "Android device health check: reachable from $serial"
+    }
+
+    if ($lanUnavailableFromDevice) {
+      $loopbackApiUrl = "http://127.0.0.1:$ServerPort/api"
+      foreach ($serial in $physicalDevices) {
+        $reverse = Invoke-NativeCapture $adbExe @('-s', $serial, 'reverse', "tcp:$ServerPort", "tcp:$ServerPort")
+        if ($reverse.ExitCode -ne 0) {
+          throw "Android device $serial cannot reach the development API over Wi-Fi, and the ADB USB tunnel could not be created. Confirm USB debugging is enabled, or connect the phone and computer to a network without client isolation. ADB response: $($reverse.Output)"
+        }
+
+        $curlLookup = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'command -v curl')
+        if ($curlLookup.ExitCode -eq 0 -and $curlLookup.Output.Trim()) {
+          $reverseHealth = Invoke-NativeCapture $adbExe @('-s', $serial, 'shell', 'curl', '--silent', '--show-error', '--connect-timeout', '5', '--max-time', '8', "$loopbackApiUrl/health")
+          if ($reverseHealth.ExitCode -ne 0 -or $reverseHealth.Output -notmatch '"ok"\s*:\s*true') {
+            throw "The ADB USB tunnel was created for Android device $serial, but the API health check still failed. Keep the server running on port $ServerPort. Device response: $($reverseHealth.Output)"
+          }
+        }
+        Write-Host "Android device health check: reachable through ADB USB tunnel on $serial"
+      }
+
+      $ApiUrl = $loopbackApiUrl
+      $env:EXPO_PUBLIC_API_URL = $ApiUrl
+      Write-Warning 'This development APK uses an ADB USB tunnel because the phone cannot reach the computer over Wi-Fi. Keep USB debugging connected and the API server running while testing.'
+    }
+  }
+}
+
+Write-ResolvedConfiguration
+
+if ($VerifyOnly) {
+  Write-Host 'Development connectivity verification completed; no mobile artifact was built.'
+  exit 0
+}
 
 $selectedJava = $null
-if ($JavaHome) {
+if ($buildAndroid -and $androidMode -eq 'Local' -and $JavaHome) {
   $explicitMajor = Get-JavaMajorVersion $JavaHome
   if ($null -eq $explicitMajor) { throw "No Java executable was found under -JavaHome '$JavaHome'." }
   if ($explicitMajor -lt 17 -or $explicitMajor -gt 23) { throw "JDK $explicitMajor at '$JavaHome' is incompatible with Gradle 8.10. Install JDK 17, then pass -JavaHome 'C:\path\to\jdk-17'." }
   $selectedJava = [pscustomobject]@{ Home = $JavaHome; Major = $explicitMajor }
-} else {
+} elseif ($buildAndroid -and $androidMode -eq 'Local') {
   $selectedJava = Find-CompatibleJavaHome
 }
-$androidSdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
-$canBuildLocal = $null -ne $selectedJava -and (Test-Path $androidSdk)
-if ($Mode -eq 'Auto') { $Mode = if ($canBuildLocal) { 'Local' } else { 'Cloud' } }
 
+New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 Push-Location $mobileRoot
 try {
-  if ($Mode -eq 'Local') {
+  if ($buildAndroid -and $androidMode -eq 'Local') {
     if (-not $selectedJava) {
       $studioJava = 'C:\Program Files\Android\Android Studio\jbr'
       $studioMajor = Get-JavaMajorVersion $studioJava
       $detail = if ($studioMajor) { " Android Studio currently provides JDK $studioMajor, which cannot run Gradle 8.10." } else { '' }
       throw "A compatible JDK was not found.$detail Install JDK 17 and rerun, or pass -JavaHome 'C:\path\to\jdk-17'."
     }
-    if (-not (Test-Path $androidSdk)) { throw "Android SDK was not found at $androidSdk. Install it from Android Studio or set ANDROID_HOME." }
+    if (-not (Test-Path -LiteralPath $androidSdk)) { throw "Android SDK was not found at $androidSdk. Install it from Android Studio or set ANDROID_HOME." }
+
     $env:JAVA_HOME = $selectedJava.Home
     $env:Path = "$(Join-Path $selectedJava.Home 'bin');$env:Path"
     $env:ANDROID_HOME = $androidSdk
-    # Expo's Metro config promotes its server root to the npm workspace root.
-    # React Native Gradle passes an entry path relative to apps/mobile on Windows,
-    # so native release bundling must retain the mobile project as Metro's root.
     $env:EXPO_NO_METRO_WORKSPACE_ROOT = '1'
     $env:NODE_ENV = 'production'
+
+    # Do not inherit a machine-wide GRADLE_USER_HOME such as C:\.gradle. That
+    # location commonly requires administrator access and makes local builds
+    # fail before Gradle can download its wrapper. Keep the cache in the
+    # current Windows user's local application data instead.
+    $gradleUserHome = Join-Path $env:LOCALAPPDATA 'Novo\Gradle'
+    New-Item -ItemType Directory -Force -Path $gradleUserHome | Out-Null
+    $env:GRADLE_USER_HOME = $gradleUserHome
+
+    Write-Host 'Builder: local Android toolchain'
     Write-Host "Using JDK $($selectedJava.Major): $($selectedJava.Home)"
     Write-Host "Using Android SDK: $androidSdk"
-    npx expo prebuild --platform android --no-install
-    if ($LASTEXITCODE -ne 0) { throw 'Expo prebuild failed.' }
+    Write-Host "Using Gradle cache: $gradleUserHome"
+    if ($Environment -eq 'Production') {
+      Write-Warning "This local $environmentName APK may use the generated local signing configuration. Use Auto or -Mode Cloud for an EAS-signed distribution APK."
+    }
+    $npxCommand = (Get-Command npx.cmd -ErrorAction Stop).Source
+    $prebuildArguments = @('expo', 'prebuild', '--platform', 'android', '--no-install')
+    if ($CleanBuild) { $prebuildArguments += '--clean' }
+    & $npxCommand @prebuildArguments
+    $prebuildExitCode = $LASTEXITCODE
+    $gradleWrapper = Join-Path $mobileRoot 'android\gradlew.bat'
+    if (-not $CleanBuild -and ($prebuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $gradleWrapper))) {
+      Write-Warning 'Incremental Expo prebuild failed. Retrying once with a regenerated Android directory.'
+      & $npxCommand expo prebuild --platform android --no-install --clean
+      $prebuildExitCode = $LASTEXITCODE
+    }
+    if ($prebuildExitCode -ne 0 -or -not (Test-Path -LiteralPath $gradleWrapper)) {
+      throw "Expo prebuild failed with exit code $prebuildExitCode."
+    }
+
+    if (-not $CleanBuild) {
+      # Expo public variables are compiled into the JavaScript bundle, but the
+      # React Native Gradle task does not track shell environment changes. Drop
+      # only those generated outputs so Metro rebundles the selected API URL
+      # while Java, Kotlin, CMake, resources and dependency outputs stay cached.
+      $appBuildRoot = Join-Path $mobileRoot 'android\app\build'
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'generated\assets\createBundleReleaseJsAndAssets') $appBuildRoot
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'generated\res\createBundleReleaseJsAndAssets') $appBuildRoot
+      Remove-SafeGeneratedPath (Join-Path $appBuildRoot 'intermediates\sourcemaps\react\release') $appBuildRoot
+    }
+
+    $buildStartedAt = Get-Date
     Push-Location (Join-Path $mobileRoot 'android')
     try {
-      .\gradlew.bat :app:assembleRelease
-      if ($LASTEXITCODE -ne 0) { throw 'Gradle APK build failed.' }
+      $gradleArguments = @(':app:assembleRelease', "-PreactNativeArchitectures=$AndroidArchitectures")
+      if ($CleanBuild) {
+        $gradleArguments = @(':app:clean') + $gradleArguments + @('--no-build-cache', '--no-daemon')
+      } else {
+        # Keep Gradle's incremental/build caches, but use a one-shot daemon so
+        # scripted builds return immediately instead of leaving inherited
+        # terminal handles open in the background.
+        $gradleArguments += @('--build-cache', '--no-daemon')
+      }
+      if ($Environment -eq 'Development') {
+        # Vital release lint still runs for Beta/Production. Development APKs
+        # prioritize iteration speed and are covered by normal type/test runs.
+        $gradleArguments += @('-x', 'lintVitalRelease')
+      }
+
+      .\gradlew.bat @gradleArguments
+      $gradleExitCode = $LASTEXITCODE
+      if ($gradleExitCode -ne 0) {
+        # Stop the daemon so a transient negative Java DNS cache cannot poison
+        # the developer's next retry.
+        .\gradlew.bat --stop | Out-Null
+        throw "Gradle APK build failed with exit code $gradleExitCode."
+      }
     } finally {
       Pop-Location
     }
+
     $sourceApk = Join-Path $mobileRoot 'android\app\build\outputs\apk\release\app-release.apk'
-    $targetApk = Join-Path $artifactRoot 'novo-android.apk'
+    if (-not (Test-Path -LiteralPath $sourceApk)) { throw "Gradle completed but no APK was found at $sourceApk." }
+    $sourceItem = Get-Item -LiteralPath $sourceApk
+    if ($sourceItem.LastWriteTimeUtc -lt $buildStartedAt.ToUniversalTime().AddMinutes(-1)) {
+      Write-Host "Gradle reused the unchanged APK built at $($sourceItem.LastWriteTime). Its embedded configuration will still be verified before copying."
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $apkArchive = [System.IO.Compression.ZipFile]::OpenRead($sourceApk)
+    try {
+      $bundleEntry = $apkArchive.GetEntry('assets/index.android.bundle')
+      if (-not $bundleEntry) { throw 'The release APK does not contain assets/index.android.bundle.' }
+      $bundleReader = New-Object System.IO.StreamReader($bundleEntry.Open())
+      try { $bundleText = $bundleReader.ReadToEnd() } finally { $bundleReader.Dispose() }
+      if (-not $bundleText.Contains($ApiUrl)) {
+        throw "The release APK does not contain the selected API URL $ApiUrl. The artifact was not copied."
+      }
+      Write-Host "Embedded API verified: $ApiUrl"
+    } finally {
+      $apkArchive.Dispose()
+    }
+    $targetApk = Join-Path $artifactRoot "novo-$environmentName.apk"
     Copy-Item -LiteralPath $sourceApk -Destination $targetApk -Force
+    $sourceHash = Get-Sha256Hash $sourceApk
+    $targetHash = Get-Sha256Hash $targetApk
+    if ($sourceHash -ne $targetHash) { throw 'The copied APK failed SHA-256 verification.' }
     Write-Host "APK ready: $targetApk"
-  } else {
-    Write-Host 'Starting an EAS internal-distribution APK build. EAS will ask you to sign in if needed.'
-    Write-Warning 'Cloud builds use the EXPO_PUBLIC_API_URL configured in the EAS preview environment. The -ApiUrl value is used by local builds and must match that EAS value.'
-    npx eas-cli build --platform android --profile preview
+    Write-Host "Built: $($sourceItem.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
+    Write-Host "SHA-256: $targetHash"
+  } elseif ($buildAndroid) {
+    Write-Host 'Builder: EAS cloud'
+    $androidProfile = if ($Environment -eq 'Production') { 'production-apk' } elseif ($Environment -eq 'Beta') { 'beta-android' } else { 'development-android' }
+    Write-Host "Starting a signed Android internal-distribution build with profile $androidProfile. EAS may ask you to sign in."
+    npx eas-cli build --platform android --profile $androidProfile
     if ($LASTEXITCODE -ne 0) { throw 'EAS APK build failed.' }
+  }
+
+  if ($buildIos) {
+    $iosProfile = if ($Environment -eq 'Production') { 'production-ios' } elseif ($Environment -eq 'Beta') { 'beta-ios' } else { 'development-ios' }
+    Write-Host 'Builder: EAS cloud for iOS'
+    Write-Host "Starting an installable iOS internal-distribution build with profile $iosProfile. Apple Developer credentials and registered test devices may be required."
+    npx eas-cli build --platform ios --profile $iosProfile
+    if ($LASTEXITCODE -ne 0) { throw 'EAS iOS build failed.' }
   }
 } finally {
   Pop-Location
