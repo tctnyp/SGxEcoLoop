@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { DimensionValue, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { finishOnboarding } from '../api';
 import { Button } from '../components/Button';
@@ -33,7 +33,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
   const [focus, setFocus] = useState('single-use');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const progress = useMemo<DimensionValue>(() => `${((step + 1) / 2) * 100}%`, [step]);
+  const progress = '33.333%' as const;
 
   const complete = async () => {
     const normalizedName = (name ?? '').trim();
@@ -60,7 +60,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
               <Ionicons name="arrow-back" size={22} color={colors.ink} />
             </Pressable>
             <Logo compact />
-            <Text style={styles.step}>STEP {step + 1} OF 2</Text>
+            <Text style={styles.step}>ACCOUNT · 1 OF 3</Text>
           </View>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: progress }]} /></View>
 
@@ -73,13 +73,14 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                 </View>
                 <Text style={styles.eyebrow}>CREATE YOUR NOVO ID</Text>
                 <Text style={styles.title}>Let’s get to know you</Text>
-                <Text style={styles.body}>Set up your account first. Your wristband colour will reveal your animal, then you’ll name your mascot together.</Text>
+                <Text style={styles.body}>Profile {step + 1} of 2. Set up your account first. Your wristband colour will reveal your animal, then you’ll name your mascot together.</Text>
                 <View style={styles.fields}>
                   <TextField label="Your name" value={name} onChangeText={setName} placeholder="What should we call you?" icon="person-outline" />
                   <TextField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" icon="mail-outline" />
                   <TextField label="Password" value={password} onChangeText={setPassword} placeholder="9+ characters" secure icon="lock-closed-outline" />
                   <TextField label="Confirm password" value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Enter it again" secure icon="shield-checkmark-outline" />
                   <View style={styles.passwordChecklist}>{PASSWORD_REQUIREMENTS.map((requirement) => { const met = requirement.test(password); return <View key={requirement.key} style={styles.passwordRequirement}><Ionicons name={met ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={met ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, met && styles.passwordRequirementMet]}>{requirement.label}</Text></View>; })}<View style={styles.passwordRequirement}><Ionicons name={confirmPassword && password === confirmPassword ? 'checkmark-circle' : 'ellipse-outline'} size={16} color={confirmPassword && password === confirmPassword ? colors.forest : colors.inkMuted} /><Text style={[styles.passwordRequirementText, Boolean(confirmPassword && password === confirmPassword) && styles.passwordRequirementMet]}>Passwords match</Text></View></View>
+                  {draft?.email ? <Text style={styles.prefillHint}>Name and email were prefilled from your verified sign-in. You can correct them before continuing.</Text> : null}
                 </View>
                 <Button label="Next: choose a focus" onPress={() => setStep(1)} disabled={!(name ?? '').trim() || !email.includes('@') || !isStrongPassword(password) || password !== confirmPassword} icon="arrow-forward" />
               </>
@@ -94,6 +95,7 @@ export function OnboardingScreen({ draft, onBack, onComplete }: Props) {
                 <Text style={styles.eyebrow}>START SMALL, STAY CURIOUS</Text>
                 <Text style={styles.title}>What feels doable?</Text>
                 <Text style={styles.body}>Pick one focus for your first week. You can always change it later.</Text>
+                <View style={styles.neaCard}><Ionicons name="information-circle-outline" size={21} color={colors.forest} /><View style={{ flex: 1 }}><Text style={styles.neaTitle}>Singapore waste snapshot</Text><Text style={styles.neaText}>NEA reports 790,000 tonnes of food waste in 2025, with 18% recycled. Plastic waste was 957,000 tonnes in 2023, with 5% recycled.</Text><Text style={styles.neaSource}>Source: National Environment Agency · figures labelled by year</Text></View></View>
                 <View style={styles.choices}>
                   {focuses.map((item) => {
                     const selected = focus === item.id;
@@ -140,6 +142,11 @@ const styles = StyleSheet.create({
   passwordRequirement: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   passwordRequirementText: { color: colors.inkMuted, fontSize: 12, lineHeight: 16 },
   passwordRequirementMet: { color: colors.forest, fontWeight: '700' },
+  prefillHint: { color: colors.inkMuted, fontSize: 11, lineHeight: 16, textAlign: 'center', paddingHorizontal: 8 },
+  neaCard: { minHeight: 96, borderRadius: 20, padding: 13, backgroundColor: '#EDF6E6', borderWidth: 1, borderColor: '#D7E6D1', flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  neaTitle: { color: colors.ink, fontSize: 13, fontWeight: '900' },
+  neaText: { color: colors.inkMuted, fontSize: 11, lineHeight: 16, marginTop: 3 },
+  neaSource: { color: colors.forest, fontSize: 9, lineHeight: 13, fontWeight: '700', marginTop: 4 },
   choices: { gap: 12, marginVertical: 8 },
   choice: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.outline, borderRadius: 22, padding: 13 },
   choiceSelected: { borderColor: colors.forest, backgroundColor: '#F4FBE3' },

@@ -4,7 +4,10 @@ export type AccountStatus = 'active' | 'limited' | 'suspended';
 export type WristbandColor = 'snowy-white' | 'charcoal-black' | 'sunset-orange' | 'tropical-green' | 'ocean-blue';
 export type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 
-export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; lesson?: { title: string; summary: string; question: string; options: string[] } };
+export type WasteStream = 'plastic' | 'food' | 'other';
+export type WasteAction = 'reduced' | 'repurposed' | 'recycled';
+export type ImpactTotals = { divertedKg: number; plasticKg: number; foodKg: number; otherKg: number; foodCo2eKg: number; approvedActions: number };
+export type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; impact?: { wasteStream: WasteStream; action: WasteAction; calibrationKey: string | null; itemCount: number; reviewMode: 'ai' | 'staff' }; lesson?: { title: string; summary: string; question: string; options: string[] } };
 export type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 export type AccessoryId =
@@ -53,6 +56,10 @@ export type User = {
   questBoardDate: string | null;
   dailyQuests: DailyQuest[];
   coupons: RedeemedCoupon[];
+  impact: ImpactTotals;
+  createdAt: string;
+  lastActiveAt: string;
+  activityDates: string[];
 };
 
 export type OAuthProvider = 'google' | 'discord' | 'microsoft';
@@ -86,7 +93,18 @@ export type NovoEvent = {
   longitude: number | null;
 };
 
-export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string };
+export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; wasteStream: WasteStream | null; wasteAction: WasteAction | null; estimatedWeightKg: number | null; impactSource: 'measured' | 'calibrated' | 'unavailable' | null };
+export type ImpactSummary = {
+  personal: ImpactTotals;
+  community: ImpactTotals;
+  foodCo2eMethod: { kgCo2ePerKg: number; label: string; source: string; sourceUrl: string; caveat: string };
+  rewards: {
+    charityContributions: Array<{ id: string; causeName: string; points: number; createdAt: string }>;
+    redemptions: RedeemedCoupon[];
+    weeklyEntries: Array<{ id: string; weekId: string; startedAt: string; completedAt: string | null; pointsAwarded: number }>;
+  };
+  education: Array<{ title: string; stat: string; source: string; sourceUrl: string }>;
+};
 export type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
 export type WeeklyCompetition = {
   id: string;

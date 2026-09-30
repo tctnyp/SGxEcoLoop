@@ -174,17 +174,17 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
 
             <View style={styles.form}>
               {recovering ? <><TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined}/><Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); }}/></> : step === 'email' ? <>
-                {!constrained && <><View style={styles.socialButtons}>
+                <><View style={[styles.socialButtons, constrained && styles.socialButtonsKeyboard]}>
                   {providers.google && <Button label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'}/>}
                   {providers.discord && <Button label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'}/>}
                   {providers.microsoft && <Button label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'}/>}
-                </View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
+                </View><View style={[styles.divider, constrained && styles.dividerKeyboard]}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>
                 <TextField label="Email" value={email} onChangeText={setEmail} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
-                {!constrained && <View style={styles.signupRow}>
+                <View style={[styles.signupRow, constrained && styles.signupRowKeyboard]}>
                   <Text style={styles.accountText}>New to novo?</Text>
                   <Button label="Sign up" variant="text" onPress={onSignUp} />
-                </View>}
+                </View>
               </> : <>
                 <Pressable accessibilityRole="button" accessibilityLabel="Change email" onPress={() => { setStep('email'); setPassword(''); setError(''); }} style={styles.emailSummary}>
                   <View style={styles.emailSummaryCopy}><Text style={styles.emailSummaryLabel}>Signing in as</Text><Text numberOfLines={1} style={styles.emailSummaryValue}>{email.trim()}</Text></View>
@@ -252,11 +252,14 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.inkMuted, fontSize: 14, lineHeight: 20, marginTop: 3 },
   form: { gap: 10 },
   socialButtons: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  socialButtonsKeyboard: { maxHeight: 46, overflow: 'hidden', gap: 5 },
   divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginVertical: 2 },
+  dividerKeyboard: { marginVertical: 0 },
   line: { flex: 1, height: 1, backgroundColor: colors.outline },
   or: { color: colors.inkMuted, fontSize: 14, fontWeight: '600' },
   forgot: { color: colors.forest, fontSize: 15, fontWeight: '700', textAlign: 'right', marginTop: -7 },
   signupRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: -6 },
+  signupRowKeyboard: { marginTop: -10, minHeight: 30 },
   accountText: { color: colors.inkMuted, fontSize: 15 },
   emailSummary: { minHeight: 58, borderRadius: 19, borderWidth: 1.5, borderColor: colors.outline, backgroundColor: colors.surface, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
   emailSummaryCopy: { flex: 1 },

@@ -36,6 +36,10 @@ type User = {
   questBoardDate: string | null;
   dailyQuests: DailyQuest[];
   coupons: RedeemedCoupon[];
+  impact: ImpactTotals;
+  createdAt: string;
+  lastActiveAt: string;
+  activityDates: string[];
 };
 
 type OAuthProvider = 'google' | 'discord' | 'microsoft';
@@ -43,7 +47,12 @@ type LinkedAccount = { provider: OAuthProvider; subject: string; email: string }
 
 type NotificationPreferences = { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean };
 
-type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; lesson?: { title: string; summary: string; question: string; options: string[] } };
+type WasteStream = 'plastic' | 'food' | 'other';
+type WasteAction = 'reduced' | 'repurposed' | 'recycled';
+type ReviewMode = 'ai' | 'staff';
+type ImpactTotals = { divertedKg: number; plasticKg: number; foodKg: number; otherKg: number; foodCo2eKg: number; approvedActions: number };
+type QuestImpact = { wasteStream: WasteStream; action: WasteAction; calibrationKey: string | null; itemCount: number; reviewMode: ReviewMode };
+type DailyQuest = { id: string; title: string; description: string; points: number; completed: boolean; kind?: 'photo' | 'video-quiz'; impact?: QuestImpact; lesson?: { title: string; summary: string; question: string; options: string[] } };
 type RedeemedCoupon = { id: string; offerId: string; name: string; code: string; redeemedAt: string };
 
 type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | 'cloud-mitts' | 'meadow-socks' | 'tide-loop';
@@ -93,6 +102,11 @@ type Submission = {
   photoEmbedding: number[] | null;
   questId?: string;
   questBoardDate?: string | null;
+  wasteStream: WasteStream | null;
+  wasteAction: WasteAction | null;
+  estimatedWeightKg: number | null;
+  impactSource: 'measured' | 'calibrated' | 'unavailable' | null;
+  impactApplied: boolean;
 };
 function memberSubmission(submission: Submission) {
   const { photoDataUrl: _photoDataUrl, ...summary } = submission;
@@ -100,6 +114,7 @@ function memberSubmission(submission: Submission) {
 }
 type FulfillmentOrder = { id: string; userId: string; accessoryId: AccessoryId; lockerLocation: string; points: number; status: 'confirmed' | 'tagged' | 'dispatched' | 'delivered' | 'cancelled'; createdAt: string };
 type Donation = { id: string; userId: string; causeId: string; causeName: string; points: number; createdAt: string };
+type WeightCalibration = { id: string; itemName: string; wasteStream: WasteStream; sampleWeightsGrams: number[]; averageWeightGrams: number; measuredAt: string; measuredBy: string };
 type NfcTag = { id: string; token: string; label: string; wristbandColor: WristbandColor; mascotType: MascotType; createdBy: string; createdAt: string; pairedUserId: string | null; pairedAt: string | null; status: 'ready' | 'paired' | 'retired' };
 type AccessoryQrTag = { id: string; token: string; accessoryId: AccessoryId; label: string; createdBy: string; createdAt: string; pairedUserId: string | null; pairedAt: string | null; status: 'ready' | 'paired' | 'retired'; orderId?: string | null };
 type WebSession = { token: string; accountId: string; role: PortalAccount['role']; expiresAt: number };
@@ -126,6 +141,7 @@ const passwordResets = new Map<string, PasswordReset>();
 const recycleRightLocations = new Map<string, LockerLocation>();
 const pickLockerLocations = new Map<string, LockerLocation>();
 const popStationLocations = new Map<string, LockerLocation>();
+const weightCalibrations = new Map<string, WeightCalibration>();
 
 const persistedCollections = {
   users,
@@ -143,6 +159,7 @@ const persistedCollections = {
   credentials,
   weeklyEntries,
   passwordResets,
+  weightCalibrations,
 } as unknown as PersistedCollections;
 
 const locationCollections = {
@@ -154,6 +171,106 @@ const locationCollections = {
 const databaseCollections = { ...persistedCollections, ...locationCollections };
 
 const oauthAttempts = new Map<string, OAuthAttempt>();
+
+const FOOD_CO2E_FACTOR = {
+  kgCo2ePerKg: 3.59,
+  label: 'Illustrative avoided food-production emissions estimate',
+  source: 'UK Defra lifecycle methodology (2011)',
+  sourceUrl: 'https://assets.publishing.service.gov.uk/government/uploads/system/uploads/attachment_data/file/69314/pb13625-emission-factor-methodology-paper-110905.pdf',
+  caveat: 'Estimate only; not a direct measurement. Plastic CO2e is intentionally not calculated.',
+} as const;
+
+function emptyImpact(): ImpactTotals {
+  return { divertedKg: 0, plasticKg: 0, foodKg: 0, otherKg: 0, foodCo2eKg: 0, approvedActions: 0 };
+}
+
+function rounded(value: number) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function applySubmissionImpact(user: User, submission: Submission) {
+  if (submission.impactApplied || submission.status !== 'approved' || !submission.wasteStream || !submission.wasteAction || !submission.estimatedWeightKg || submission.estimatedWeightKg <= 0) return false;
+  const weight = rounded(submission.estimatedWeightKg);
+  user.impact.divertedKg = rounded(user.impact.divertedKg + weight);
+  if (submission.wasteStream === 'plastic') user.impact.plasticKg = rounded(user.impact.plasticKg + weight);
+  if (submission.wasteStream === 'food') {
+    user.impact.foodKg = rounded(user.impact.foodKg + weight);
+    user.impact.foodCo2eKg = rounded(user.impact.foodCo2eKg + weight * FOOD_CO2E_FACTOR.kgCo2ePerKg);
+  }
+  if (submission.wasteStream === 'other') user.impact.otherKg = rounded(user.impact.otherKg + weight);
+  user.impact.approvedActions += 1;
+  submission.impactApplied = true;
+  return true;
+}
+
+function impactForQuest(quest: DailyQuest, detections: AiDetection[]) {
+  if (!quest.impact) return { wasteStream: null, wasteAction: null, estimatedWeightKg: null, impactSource: null } as const;
+  const candidates = [quest.impact.calibrationKey, ...detections.map((detection) => detection.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'))].filter(Boolean) as string[];
+  const calibration = candidates.map((key) => weightCalibrations.get(key)).find(Boolean);
+  if (!calibration) return { wasteStream: quest.impact.wasteStream, wasteAction: quest.impact.action, estimatedWeightKg: null, impactSource: 'unavailable' as const };
+  return {
+    wasteStream: quest.impact.wasteStream,
+    wasteAction: quest.impact.action,
+    estimatedWeightKg: rounded((calibration.averageWeightGrams * quest.impact.itemCount) / 1000),
+    impactSource: 'calibrated' as const,
+  };
+}
+
+function communityImpact() {
+  const totals = [...users.values()].reduce((result, user) => ({
+    divertedKg: result.divertedKg + user.impact.divertedKg,
+    plasticKg: result.plasticKg + user.impact.plasticKg,
+    foodKg: result.foodKg + user.impact.foodKg,
+    otherKg: result.otherKg + user.impact.otherKg,
+    foodCo2eKg: result.foodCo2eKg + user.impact.foodCo2eKg,
+    approvedActions: result.approvedActions + user.impact.approvedActions,
+  }), emptyImpact());
+  return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, rounded(value)])) as unknown as ImpactTotals;
+}
+
+function recordActivity(user: User) {
+  const now = new Date().toISOString();
+  const today = singaporeDate(now);
+  user.lastActiveAt = now;
+  if (!user.activityDates.includes(today)) user.activityDates.push(today);
+}
+
+function pilotMetrics() {
+  const activeUsers = [...users.values()].filter((user) => user.activityDates.length > 0);
+  const returnedOn = (days: number) => activeUsers.filter((user) => {
+    const created = new Date(`${singaporeDate(user.createdAt)}T00:00:00+08:00`).getTime();
+    return user.activityDates.some((date) => Math.round((new Date(`${date}T00:00:00+08:00`).getTime() - created) / 86_400_000) === days);
+  }).length;
+  const recentBoundary = Date.now() - 7 * 86_400_000;
+  const recentApproved = [...submissions.values()].filter((submission) => submission.status === 'approved' && Date.parse(submission.createdAt) >= recentBoundary).length;
+  return {
+    dataClassification: process.env.NOVO_PILOT_DATA_CLASSIFICATION || 'internal-test',
+    activeUsers: activeUsers.length,
+    day1ReturnRate: activeUsers.length ? rounded(returnedOn(1) / activeUsers.length) : 0,
+    day7ReturnRate: activeUsers.length ? rounded(returnedOn(7) / activeUsers.length) : 0,
+    averageStreak: activeUsers.length ? rounded(activeUsers.reduce((sum, user) => sum + user.streak, 0) / activeUsers.length) : 0,
+    questsPerActiveUser7d: activeUsers.length ? rounded(recentApproved / activeUsers.length) : 0,
+    note: 'Internal and demo activity is labelled test data. Replace the classification only when a consented 10–20 person, 3–5 day pilot begins.',
+  };
+}
+
+function inferLegacyImpact(submission: Submission) {
+  const task = submission.task.toLowerCase();
+  const inferred = task.includes('food') || task.includes('meal')
+    ? { wasteStream: 'food' as const, wasteAction: 'reduced' as const, calibrationKey: 'food-serving' }
+    : task.includes('bottle')
+      ? { wasteStream: 'plastic' as const, wasteAction: task.includes('return') || task.includes('recycl') ? 'recycled' as const : 'reduced' as const, calibrationKey: 'pet-beverage-bottle' }
+      : task.includes('plastic') || task.includes('recycl') || task.includes('reusable') || task.includes('refill')
+        ? { wasteStream: 'plastic' as const, wasteAction: task.includes('recycl') || task.includes('sort') ? 'recycled' as const : 'reduced' as const, calibrationKey: 'single-use-container' }
+        : null;
+  if (!inferred) return false;
+  const calibration = weightCalibrations.get(inferred.calibrationKey);
+  submission.wasteStream = inferred.wasteStream;
+  submission.wasteAction = inferred.wasteAction;
+  submission.impactSource = calibration ? 'calibrated' : 'unavailable';
+  submission.estimatedWeightKg = calibration ? rounded(calibration.averageWeightGrams / 1000) : null;
+  return true;
+}
 
 function passwordMatches(email: string, password: string) {
   const credential = credentials.get(email.toLowerCase());
@@ -175,6 +292,7 @@ function createCredential(email: string, password: string): Credential {
 function createMember(input: { name: string; email: string; mascotName?: string; onboardingCompleted?: boolean; password?: string }) {
   const email = input.email.toLowerCase();
   if (users.has(email) || findPortalAccountByEmail(email)) throw Object.assign(new Error('An account already exists for this email.'), { statusCode: 409 });
+  const now = new Date().toISOString();
   const user: User = {
     id: crypto.randomUUID(),
     name: input.name,
@@ -199,6 +317,10 @@ function createMember(input: { name: string; email: string; mascotName?: string;
     questBoardDate: null,
     dailyQuests: [],
     coupons: [],
+    impact: emptyImpact(),
+    createdAt: now,
+    lastActiveAt: now,
+    activityDates: [singaporeDate(now)],
   };
   users.set(email, user);
   portalAccounts.set(user.id, { id: user.id, name: user.name, email: user.email, role: 'member', status: 'active' });
@@ -292,6 +414,10 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
     user.dailyQuests ??= [];
     user.coupons ??= [];
     user.friendIds ??= [];
+    if (!user.impact) { user.impact = emptyImpact(); changed = true; }
+    if (!user.createdAt) { user.createdAt = new Date().toISOString(); changed = true; }
+    if (!user.lastActiveAt) { user.lastActiveAt = user.createdAt; changed = true; }
+    if (!Array.isArray(user.activityDates)) { user.activityDates = [singaporeDate(user.createdAt)]; changed = true; }
     if (!user.username) { user.username = user.email.split('@')[0] || `member-${user.id.slice(0, 8)}`; changed = true; }
     if (user.avatarDataUrl === undefined) { user.avatarDataUrl = null; changed = true; }
     if (!Array.isArray(user.linkedAccounts)) { user.linkedAccounts = []; changed = true; }
@@ -315,6 +441,13 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
     submission.aiModel ??= null;
     submission.photoFingerprint ??= fingerprintPhoto(submission.photoDataUrl);
     submission.photoEmbedding ??= null;
+    if (submission.wasteStream === undefined) { submission.wasteStream = null; changed = true; }
+    if (submission.wasteAction === undefined) { submission.wasteAction = null; changed = true; }
+    if (submission.estimatedWeightKg === undefined) { submission.estimatedWeightKg = null; changed = true; }
+    if (submission.impactSource === undefined) { submission.impactSource = null; changed = true; }
+    if (submission.impactApplied === undefined) { submission.impactApplied = false; changed = true; }
+    const owner = findUser(submission.userId);
+    if (owner && applySubmissionImpact(owner, submission)) changed = true;
   }
   for (const [orderId, order] of fulfillmentOrders) {
     if (!validUserIds.has(order.userId)) { fulfillmentOrders.delete(orderId); changed = true; continue; }
@@ -470,7 +603,19 @@ const marketSchema = z.object({
   accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']).nullable().default(null),
 });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'tagged', 'dispatched', 'delivered', 'cancelled']) });
-const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000) });
+const impactInputSchema = z.object({
+  wasteStream: z.enum(['plastic', 'food', 'other']),
+  wasteAction: z.enum(['reduced', 'repurposed', 'recycled']),
+  estimatedWeightKg: z.number().positive().max(1000),
+  source: z.enum(['measured', 'calibrated']).default('measured'),
+});
+const reviewSchema = z.object({ decision: z.enum(['approved', 'changes_requested']), points: z.number().int().min(0).max(5000), impact: impactInputSchema.optional() });
+const calibrationSchema = z.object({
+  id: z.string().trim().regex(/^[a-z0-9-]+$/).max(80),
+  itemName: z.string().trim().min(2).max(100),
+  wasteStream: z.enum(['plastic', 'food', 'other']),
+  sampleWeightsGrams: z.array(z.number().positive().max(100_000)).min(10).max(100),
+});
 const handoffExchangeSchema = z.object({ handoffToken: z.string().min(10) });
 const memberAccessorySchema = z.object({ accessoryId: z.enum(['bright-star', 'sunny-cap', 'petal-pin', 'trail-scarf', 'cloud-mitts', 'meadow-socks', 'tide-loop']) });
 const memberPurchaseSchema = memberAccessorySchema;
@@ -481,42 +626,42 @@ const notificationPreferencesSchema = z.object({ dailyGreeting: z.boolean(), tas
 const weeklySubmissionSchema = z.object({ answers: z.array(z.number().int().min(0).max(3)).length(4) });
 
 const questTemplates = [
-  { title: 'Build with recyclables', description: 'Show yourself making a useful product from recyclable materials.', points: 45, kind: 'photo' as const },
-  { title: 'Return a BCRS bottle', description: 'Show at least one eligible beverage container being returned through BCRS.', points: 35, kind: 'photo' as const },
-  { title: 'Choose a green purchase', description: 'Show a receipt from a verified green event, product, or business.', points: 30, kind: 'photo' as const },
+  { title: 'Return a BCRS bottle', description: 'Return one eligible plastic beverage container through BCRS. YOLO identifies the item; a measured 10-item calibration supplies its weight.', points: 35, kind: 'photo' as const, impact: { wasteStream: 'plastic' as const, action: 'recycled' as const, calibrationKey: 'pet-beverage-bottle', itemCount: 1, reviewMode: 'ai' as const } },
+  { title: 'Rescue one food serving', description: 'Show one edible serving saved, shared, or stored instead of discarded. Staff confirm the evidence and weight.', points: 45, kind: 'photo' as const, impact: { wasteStream: 'food' as const, action: 'reduced' as const, calibrationKey: 'food-serving', itemCount: 1, reviewMode: 'staff' as const } },
+  { title: 'Choose a low-waste purchase', description: 'Show a receipt that clearly documents a refill, package-free purchase, or rescued-food purchase. Receipt quests are always reviewed by staff.', points: 30, kind: 'photo' as const, impact: { wasteStream: 'plastic' as const, action: 'reduced' as const, calibrationKey: null, itemCount: 1, reviewMode: 'staff' as const } },
   { title: 'Sustainability lesson', description: 'Watch today’s short sustainability lesson and complete its knowledge check.', points: 25, kind: 'video-quiz' as const, lesson: { title: 'Why clean recycling matters', summary: 'Food and liquid residue can contaminate an otherwise recyclable load. Empty, rinse and dry containers before placing them in the blue bin.', question: 'What should you do before recycling a used drink container?', options: ['Empty, rinse and dry it', 'Leave liquid inside', 'Put it in a plastic bag'] } },
-  { title: 'Bring a reusable', description: 'Show yourself using a reusable bag, container, cup, or bottle.', points: 30, kind: 'photo' as const },
-  { title: 'Sort clean recyclables', description: 'Show a clean and correctly sorted recycling load before disposal.', points: 35, kind: 'photo' as const },
+  { title: 'Replace a disposable container', description: 'Show one reusable bag, container, cup, or bottle replacing a single-use plastic item.', points: 30, kind: 'photo' as const, impact: { wasteStream: 'plastic' as const, action: 'reduced' as const, calibrationKey: 'single-use-container', itemCount: 1, reviewMode: 'ai' as const } },
+  { title: 'Sort one plastic item correctly', description: 'Show one clean plastic item sorted for recycling before disposal.', points: 35, kind: 'photo' as const, impact: { wasteStream: 'plastic' as const, action: 'recycled' as const, calibrationKey: 'mixed-plastic-item', itemCount: 1, reviewMode: 'ai' as const } },
 ];
 
-const accessoryQuestTemplates: Record<AccessoryId, Array<{ title: string; description: string; points: number }>> = {
+const accessoryQuestTemplates: Record<AccessoryId, Array<{ title: string; description: string; points: number; impact: QuestImpact }>> = {
   'bright-star': [
-    { title: 'Spot a better bin', description: 'Find one clearly labelled recycling point and sort an item correctly.', points: 30 },
-    { title: 'Share one bright idea', description: 'Show someone one simple way to avoid disposable packaging.', points: 25 },
+    { title: 'Recycle a rigid plastic container', description: 'Rinse, dry and sort one rigid plastic container in a clearly labelled recycling point.', points: 30, impact: { wasteStream: 'plastic', action: 'recycled', calibrationKey: 'single-use-container', itemCount: 1, reviewMode: 'ai' } },
+    { title: 'Avoid one plastic bag', description: 'Use your own bag instead of taking one disposable plastic bag.', points: 25, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'plastic-carrier-bag', itemCount: 1, reviewMode: 'ai' } },
   ],
   'petal-pin': [
-    { title: 'Choose a refillable bloom', description: 'Replace one packaged drink or toiletry with a refill today.', points: 30 },
-    { title: 'Rescue a small item', description: 'Keep one useful item in circulation by donating or repurposing it.', points: 35 },
+    { title: 'Choose a refill', description: 'Replace one packaged drink or toiletry with a refill today.', points: 30, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'single-use-container', itemCount: 1, reviewMode: 'ai' } },
+    { title: 'Repurpose one container', description: 'Keep one useful container in circulation by safely repurposing it.', points: 35, impact: { wasteStream: 'plastic', action: 'repurposed', calibrationKey: 'single-use-container', itemCount: 1, reviewMode: 'ai' } },
   ],
   'sunny-cap': [
-    { title: 'Sunny litter loop', description: 'Take a short outdoor walk and safely collect visible litter.', points: 40 },
-    { title: 'Walk one short trip', description: 'Swap a short vehicle trip for walking or public transport.', points: 35 },
+    { title: 'Recover plastic litter', description: 'Safely collect and correctly dispose of one visible plastic litter item.', points: 40, impact: { wasteStream: 'plastic', action: 'recycled', calibrationKey: 'mixed-plastic-item', itemCount: 1, reviewMode: 'ai' } },
+    { title: 'Save a meal portion', description: 'Store or share one leftover portion instead of discarding it.', points: 40, impact: { wasteStream: 'food', action: 'reduced', calibrationKey: 'food-serving', itemCount: 1, reviewMode: 'staff' } },
   ],
   'trail-scarf': [
-    { title: 'Mend a textile', description: 'Repair a loose seam, button, or small tear instead of replacing it.', points: 45 },
-    { title: 'Give fabric another life', description: 'Reuse a cloth, bag, or old textile for a new purpose.', points: 35 },
+    { title: 'Mend a textile', description: 'Repair a loose seam, button, or small tear instead of replacing it.', points: 45, impact: { wasteStream: 'other', action: 'repurposed', calibrationKey: 'textile-item', itemCount: 1, reviewMode: 'staff' } },
+    { title: 'Give fabric another life', description: 'Reuse a cloth, bag, or old textile for a new purpose.', points: 35, impact: { wasteStream: 'other', action: 'repurposed', calibrationKey: 'textile-item', itemCount: 1, reviewMode: 'staff' } },
   ],
   'cloud-mitts': [
-    { title: 'Hands-on sorting', description: 'Rinse and sort a small batch of cans, bottles, or containers.', points: 35 },
-    { title: 'Clean one shared corner', description: 'Tidy a small shared space and dispose of everything correctly.', points: 45 },
+    { title: 'Sort two plastic containers', description: 'Rinse, dry and sort two plastic containers for recycling.', points: 35, impact: { wasteStream: 'plastic', action: 'recycled', calibrationKey: 'single-use-container', itemCount: 2, reviewMode: 'ai' } },
+    { title: 'Freeze a food portion', description: 'Freeze one edible portion before it spoils.', points: 45, impact: { wasteStream: 'food', action: 'reduced', calibrationKey: 'food-serving', itemCount: 1, reviewMode: 'staff' } },
   ],
   'meadow-socks': [
-    { title: 'Step towards a return point', description: 'Walk to a nearby Return Right machine with an eligible container.', points: 40 },
-    { title: 'Low-waste walking errand', description: 'Complete one nearby errand on foot with a reusable bag.', points: 35 },
+    { title: 'Return a plastic bottle', description: 'Walk to a nearby Return Right machine with one eligible plastic container.', points: 40, impact: { wasteStream: 'plastic', action: 'recycled', calibrationKey: 'pet-beverage-bottle', itemCount: 1, reviewMode: 'ai' } },
+    { title: 'Bring a reusable bag', description: 'Complete one errand without accepting a disposable plastic bag.', points: 35, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'plastic-carrier-bag', itemCount: 1, reviewMode: 'ai' } },
   ],
   'tide-loop': [
-    { title: 'Complete a refill loop', description: 'Refill the same bottle or cup instead of taking a disposable one.', points: 35 },
-    { title: 'Count what you avoided', description: 'Track three single-use items you avoided today.', points: 30 },
+    { title: 'Complete a refill loop', description: 'Refill the same bottle or cup instead of taking a disposable one.', points: 35, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'single-use-container', itemCount: 1, reviewMode: 'ai' } },
+    { title: 'Avoid three single-use items', description: 'Show the reusable alternatives that replaced three single-use plastic items today.', points: 30, impact: { wasteStream: 'plastic', action: 'reduced', calibrationKey: 'single-use-container', itemCount: 3, reviewMode: 'staff' } },
   ],
 };
 
@@ -917,7 +1062,11 @@ function accountFromRequest(request: Request) {
 
 function memberFromRequest(request: Request) {
   const session = sessionFromRequest(request);
-  if (session?.role === 'member') return findUser(session.accountId) ?? null;
+  if (session?.role === 'member') {
+    const webUser = findUser(session.accountId) ?? null;
+    if (webUser) recordActivity(webUser);
+    return webUser;
+  }
 
   const authorization = request.header('authorization');
   const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
@@ -928,6 +1077,7 @@ function memberFromRequest(request: Request) {
     mobileSessions.delete(mobileSession.token);
     return null;
   }
+  recordActivity(user);
   return user;
 }
 
@@ -981,7 +1131,8 @@ app.use((request, response, next) => {
   next();
 });
 app.use((request, response, next) => {
-  if (request.method === 'POST' || request.method === 'PATCH' || request.method === 'DELETE') {
+  const recordsMemberActivity = request.method === 'GET' && request.path.startsWith('/api/member/');
+  if (request.method === 'POST' || request.method === 'PATCH' || request.method === 'DELETE' || recordsMemberActivity) {
     response.on('finish', () => {
       if (response.statusCode < 400) void persistDatabase(persistedCollections).catch((error) => console.error('Could not persist novo state.', error));
     });
@@ -1490,6 +1641,23 @@ app.get('/api/member/tasks', (request, response) => {
   response.json({ quests: user.dailyQuests, events, submissions: [...submissions.values()].filter((submission) => submission.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(memberSubmission), weeklyCompetition: weeklyCompetitionView(user) });
 });
 
+app.get('/api/member/impact', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  const userDonations = [...donations.values()].filter((donation) => donation.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const entries = [...weeklyEntries.values()].filter((entry) => entry.userId === user.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  response.json({
+    personal: user.impact,
+    community: communityImpact(),
+    foodCo2eMethod: FOOD_CO2E_FACTOR,
+    rewards: { charityContributions: userDonations, redemptions: user.coupons, weeklyEntries: entries },
+    education: [
+      { title: 'Food waste in Singapore', stat: '790,000 tonnes generated in 2025; 18% recycled', source: 'National Environment Agency', sourceUrl: 'https://www.nea.gov.sg/our-services/waste-management/3r-programmes-and-resources/food-waste-management' },
+      { title: 'Plastic waste baseline', stat: '957,000 tonnes generated in 2023; 5% recycled', source: 'National Environment Agency', sourceUrl: 'https://www.nea.gov.sg/docs/default-source/default-document-library/waste-and-recycling-statistics-2014-to-2023.pdf' },
+    ],
+  });
+});
+
 app.post('/api/member/weekly/start', (request, response) => {
   const user = memberFromRequest(request);
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
@@ -1572,6 +1740,11 @@ app.post('/api/member/tasks/custom', async (request, response, next) => {
       rewardApplied: Boolean(awardedPoints),
       photoFingerprint,
       photoEmbedding: analysis.embedding,
+      wasteStream: null,
+      wasteAction: null,
+      estimatedWeightKg: null,
+      impactSource: null,
+      impactApplied: false,
     };
     if (awardedPoints) {
       user.points += awardedPoints;
@@ -1597,15 +1770,18 @@ app.post('/api/member/tasks/:questId/submit', async (request, response, next) =>
     if ([...submissions.values()].some((item) => item.photoFingerprint === photoFingerprint)) return response.status(409).json({ message: 'This camera image has already been submitted.' });
     const analysis = await analyzeSubmission(input.photoDataUrl, `${quest.title}. ${quest.description} Member evidence: ${input.description}`);
     if (analysis.embedding && [...submissions.values()].some((item) => embeddingSimilarity(item.photoEmbedding, analysis.embedding) >= 0.985)) return response.status(409).json({ message: 'This photo is too similar to evidence already submitted.' });
-    const awardedPoints = analysis.accepted ? quest.points : null;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: analysis.accepted ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, aiAccepted: analysis.accepted, aiDetections: analysis.detections, aiProcessingMs: analysis.processingMs, aiSummary: analysis.summary, aiDecisionReason: analysis.decisionReason, aiModel: analysis.model, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate };
+    const impact = impactForQuest(quest, analysis.detections);
+    const autoApproved = analysis.accepted && quest.impact?.reviewMode !== 'staff';
+    const awardedPoints = autoApproved ? quest.points : null;
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: input.description, photoDataUrl: input.photoDataUrl, status: autoApproved ? 'approved' : 'pending', points: awardedPoints, aiConfidence: analysis.confidence, aiLabel: analysis.label, aiAccepted: analysis.accepted, aiDetections: analysis.detections, aiProcessingMs: analysis.processingMs, aiSummary: analysis.summary, aiDecisionReason: quest.impact?.reviewMode === 'staff' ? 'This quest requires staff review; AI output is advisory only.' : analysis.decisionReason, aiModel: analysis.model, createdAt: new Date().toISOString(), rewardApplied: Boolean(awardedPoints), photoFingerprint, photoEmbedding: analysis.embedding, questId: quest.id, questBoardDate: user.questBoardDate, ...impact, impactApplied: false };
     if (awardedPoints) {
       user.points += awardedPoints;
       user.lifetimePoints += awardedPoints;
       quest.completed = true;
+      applySubmissionImpact(user, submission);
     }
     submissions.set(submission.id, submission);
-    response.status(201).json({ submission: memberSubmission(submission), user, automated: analysis.accepted });
+    response.status(201).json({ submission: memberSubmission(submission), user, automated: autoApproved });
   } catch (error) {
     next(error);
   }
@@ -1623,7 +1799,7 @@ app.post('/api/member/tasks/:questId/quiz', (request, response, next) => {
     quest.completed = true;
     user.points += quest.points;
     user.lifetimePoints += quest.points;
-    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', aiAccepted: true, aiDetections: [], aiProcessingMs: null, aiSummary: 'The member completed the knowledge check successfully.', aiDecisionReason: 'The submitted answer matched the correct response.', aiModel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate };
+    const submission: Submission = { id: `sub_${crypto.randomUUID()}`, userId: user.id, task: quest.title, note: `Knowledge check: ${answer}`, photoDataUrl: '', status: 'approved', points: quest.points, aiConfidence: 1, aiLabel: 'knowledge-check', aiAccepted: true, aiDetections: [], aiProcessingMs: null, aiSummary: 'The member completed the knowledge check successfully.', aiDecisionReason: 'The submitted answer matched the correct response.', aiModel: 'knowledge-check', createdAt: new Date().toISOString(), rewardApplied: true, photoFingerprint: '', photoEmbedding: null, questId: quest.id, questBoardDate: user.questBoardDate, wasteStream: null, wasteAction: null, estimatedWeightKg: null, impactSource: null, impactApplied: false };
     submissions.set(submission.id, submission);
     response.status(201).json({ submission: memberSubmission(submission), user, automated: true });
   } catch (error) {
@@ -1712,6 +1888,25 @@ app.get('/api/member/wristband/pickup-locations', async (request, response, next
   } catch (error) {
     next(error);
   }
+});
+
+function pilotBypassAvailable(user: User) {
+  return process.env.NOVO_PILOT_BYPASS === '1' && (process.env.NOVO_PILOT_ALLOW_ANY === '1' || user.email.endsWith('@demo.novo.sg'));
+}
+
+app.get('/api/member/pilot-capabilities', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  response.json({ wristbandBypass: pilotBypassAvailable(user), dataClassification: process.env.NOVO_PILOT_DATA_CLASSIFICATION || 'internal-test' });
+});
+
+app.post('/api/member/wristband/pilot-bypass', (request, response) => {
+  const user = memberFromRequest(request);
+  if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
+  if (!pilotBypassAvailable(user)) return response.status(403).json({ message: 'The wristband bypass is available only to explicitly enabled demo or pilot accounts.' });
+  user.wristbandPaired = true;
+  user.wristbandPickupLocation = 'Pilot demo bypass — no physical wristband';
+  response.json({ user, dataClassification: process.env.NOVO_PILOT_DATA_CLASSIFICATION || 'internal-test' });
 });
 
 app.delete('/api/member/account', (request, response) => {
@@ -1860,6 +2055,43 @@ app.get('/api/portal/submissions', requirePortalRole('staff', 'admin'), (request
   response.json({ submissions: [...submissions.values()].filter((submission) => all || submission.status === 'pending').sort((a, b) => b.createdAt.localeCompare(a.createdAt)) });
 });
 
+app.get('/api/portal/impact/calibrations', requirePortalRole('staff', 'admin'), (_request, response) => {
+  response.json({ calibrations: [...weightCalibrations.values()].sort((a, b) => a.itemName.localeCompare(b.itemName)), minimumSamples: 10 });
+});
+
+app.put('/api/portal/impact/calibrations/:calibrationId', requirePortalRole('staff', 'admin'), (request, response, next) => {
+  try {
+    const input = calibrationSchema.parse({ ...request.body, id: routeParam(request.params.calibrationId) });
+    const session = sessionFromRequest(request);
+    const calibration: WeightCalibration = {
+      ...input,
+      averageWeightGrams: rounded(input.sampleWeightsGrams.reduce((sum, value) => sum + value, 0) / input.sampleWeightsGrams.length),
+      measuredAt: new Date().toISOString(),
+      measuredBy: session?.accountId ?? 'development-staff',
+    };
+    weightCalibrations.set(calibration.id, calibration);
+    response.json({ calibration });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/portal/impact/backfill', requirePortalRole('admin'), (_request, response) => {
+  let classified = 0;
+  let applied = 0;
+  let awaitingCalibration = 0;
+  for (const submission of submissions.values()) {
+    if (submission.status !== 'approved' || submission.impactApplied) continue;
+    if (!submission.wasteStream && inferLegacyImpact(submission)) classified += 1;
+    const owner = findUser(submission.userId);
+    if (owner && applySubmissionImpact(owner, submission)) applied += 1;
+    else if (submission.wasteStream && !submission.estimatedWeightKg) awaitingCalibration += 1;
+  }
+  response.json({ classified, applied, awaitingCalibration, message: 'Backfill never invents weight. Records without a 10-sample calibration remain unapplied.' });
+});
+
+app.get('/api/portal/pilot-metrics', requirePortalRole('admin'), (_request, response) => {
+  response.json({ metrics: pilotMetrics() });
+});
+
 app.delete('/api/portal/submissions/:submissionId', requirePortalRole('staff', 'admin'), (request, response) => {
   const deleted = submissions.delete(routeParam(request.params.submissionId));
   if (!deleted) return response.status(404).json({ message: 'Submission not found.' });
@@ -1873,6 +2105,12 @@ app.post('/api/portal/submissions/:submissionId/review', requirePortalRole('staf
     if (!submission) return response.status(404).json({ message: 'Submission not found.' });
     submission.status = input.decision;
     submission.points = input.decision === 'approved' ? input.points : 0;
+    if (input.impact) {
+      submission.wasteStream = input.impact.wasteStream;
+      submission.wasteAction = input.impact.wasteAction;
+      submission.estimatedWeightKg = rounded(input.impact.estimatedWeightKg);
+      submission.impactSource = input.impact.source;
+    }
     if (input.decision === 'approved' && !submission.rewardApplied) {
       const user = findUser(submission.userId);
       if (user) {
@@ -1885,6 +2123,8 @@ app.post('/api/portal/submissions/:submissionId/review', requirePortalRole('staf
       }
       submission.rewardApplied = true;
     }
+    const impactOwner = findUser(submission.userId);
+    if (impactOwner) applySubmissionImpact(impactOwner, submission);
     response.json({ submission, user: findUser(submission.userId) });
   } catch (error) {
     next(error);
@@ -2078,6 +2318,10 @@ app.post('/api/portal/accounts', requirePortalRole('admin'), (request, response,
         questBoardDate: null,
         dailyQuests: [],
         coupons: [],
+        impact: emptyImpact(),
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        activityDates: [singaporeDate()],
       });
     }
     response.status(201).json({ account: accountView(account) });
@@ -2125,6 +2369,10 @@ app.patch('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reques
         questBoardDate: null,
         dailyQuests: [],
         coupons: [],
+        impact: emptyImpact(),
+        createdAt: new Date().toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        activityDates: [singaporeDate()],
       };
       member = createdMember;
       users.set(account.email, createdMember);

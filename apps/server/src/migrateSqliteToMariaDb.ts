@@ -5,7 +5,7 @@ import sqlite3 from 'sqlite3';
 type StateRow = { collection: string; record_key: string; payload: string; updated_at: string };
 
 const collectionTables: Record<string, string> = {
-  users: 'user_profiles', portalAccounts: 'user_accounts', credentials: 'user_credentials', webSessions: 'user_web_sessions', mobileSessions: 'user_mobile_sessions', mobileHandoffs: 'user_mobile_handoffs', passwordResets: 'user_password_resets', marketItems: 'marketplace_items', fulfillmentOrders: 'marketplace_orders', donations: 'marketplace_donations', portalEvents: 'task_events', weeklyEntries: 'task_weekly_entries', submissions: 'review_queue', nfcTags: 'wristband_tags', accessoryQrTags: 'wristband_accessory_tags', recycleRightLocations: 'locations_recycle_right', pickLockerLocations: 'locations_pick_lockers', popStationLocations: 'locations_popstations',
+  users: 'user_profiles', portalAccounts: 'user_accounts', credentials: 'user_credentials', webSessions: 'user_web_sessions', mobileSessions: 'user_mobile_sessions', mobileHandoffs: 'user_mobile_handoffs', passwordResets: 'user_password_resets', marketItems: 'marketplace_items', fulfillmentOrders: 'marketplace_orders', donations: 'marketplace_donations', portalEvents: 'task_events', weeklyEntries: 'task_weekly_entries', submissions: 'review_queue', nfcTags: 'wristband_tags', accessoryQrTags: 'wristband_accessory_tags', recycleRightLocations: 'locations_recycle_right', pickLockerLocations: 'locations_pick_lockers', popStationLocations: 'locations_popstations', weightCalibrations: 'impact_weight_calibrations',
 };
 
 const defaultSource = fileURLToPath(new URL('../data/novo.sqlite', import.meta.url));

@@ -214,6 +214,50 @@ describe('novo API', () => {
     assert.ok(!queue.body.submissions.some((submission: { id: string }) => submission.id === submitted.body.submission.id));
   });
 
+  it('requires real calibration samples and applies approved impact exactly once', async () => {
+    const rejectedCalibration = await request(app)
+      .put('/api/portal/impact/calibrations/pet-beverage-bottle')
+      .set('x-novo-role', 'staff')
+      .send({ itemName: 'PET beverage bottle', wasteStream: 'plastic', sampleWeightsGrams: [20, 21, 22] });
+    assert.equal(rejectedCalibration.status, 400);
+
+    const calibration = await request(app)
+      .put('/api/portal/impact/calibrations/pet-beverage-bottle')
+      .set('x-novo-role', 'staff')
+      .send({ itemName: 'PET beverage bottle', wasteStream: 'plastic', sampleWeightsGrams: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29] });
+    assert.equal(calibration.status, 200);
+    assert.equal(calibration.body.calibration.averageWeightGrams, 24.5);
+
+    const member = await createMember('impact@example.com');
+    const evidence = await request(app)
+      .post('/api/member/tasks/custom')
+      .set('authorization', member.authorization)
+      .send({ title: 'Return a plastic bottle', description: 'Bottle weighed on a physical scale.', photoDataUrl: `data:image/jpeg;base64,${Buffer.from('impact-photo').toString('base64')}` });
+    const reviewed = await request(app)
+      .post(`/api/portal/submissions/${evidence.body.submission.id}/review`)
+      .set('x-novo-role', 'staff')
+      .send({ decision: 'approved', points: 40, impact: { wasteStream: 'plastic', wasteAction: 'recycled', estimatedWeightKg: 0.031, source: 'measured' } });
+    assert.equal(reviewed.status, 200);
+    assert.equal(reviewed.body.submission.impactApplied, true);
+
+    const firstImpact = await request(app).get('/api/member/impact').set('authorization', member.authorization);
+    assert.equal(firstImpact.status, 200);
+    assert.equal(firstImpact.body.personal.divertedKg, 0.031);
+    assert.equal(firstImpact.body.personal.plasticKg, 0.031);
+    assert.equal(firstImpact.body.personal.foodCo2eKg, 0);
+    assert.equal(firstImpact.body.personal.approvedActions, 1);
+    assert.equal(firstImpact.body.foodCo2eMethod.caveat.includes('Plastic CO2e'), true);
+
+    const repeatedReview = await request(app)
+      .post(`/api/portal/submissions/${evidence.body.submission.id}/review`)
+      .set('x-novo-role', 'staff')
+      .send({ decision: 'approved', points: 40, impact: { wasteStream: 'plastic', wasteAction: 'recycled', estimatedWeightKg: 0.031, source: 'measured' } });
+    assert.equal(repeatedReview.status, 200);
+    const unchangedImpact = await request(app).get('/api/member/impact').set('authorization', member.authorization);
+    assert.equal(unchangedImpact.body.personal.divertedKg, 0.031);
+    assert.equal(unchangedImpact.body.personal.approvedActions, 1);
+  });
+
   it('stores detailed YOLO results and automatically rewards accepted evidence', async () => {
     const originalFetch = globalThis.fetch;
     let submittedDescription = '';

@@ -27,6 +27,7 @@ const collectionTables = {
   recycleRightLocations: 'locations_recycle_right',
   pickLockerLocations: 'locations_pick_lockers',
   popStationLocations: 'locations_popstations',
+  weightCalibrations: 'impact_weight_calibrations',
 } as const;
 
 type CollectionName = keyof typeof collectionTables;

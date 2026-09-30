@@ -8,6 +8,8 @@
     "start": "node dist/index.js",
     "db:reset": "npm run build && node dist/resetDb.js",
     "db:migrate:sqlite-to-mariadb": "npm run build && node dist/migrateSqliteToMariaDb.js",
+    "impact:backfill": "npm run build && node dist/backfillImpact.js",
+    "impact:backfill:apply": "npm run build && node dist/backfillImpact.js --apply",
     "locations:update": "node scripts/updateLocationSnapshots.mjs",
     "demo": "npm run build && node dist/seedDemo.js",
     "build": "tsc",

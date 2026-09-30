@@ -60,7 +60,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const lesson = lessons[step] ?? lessons[0]!;
-  const progress = useMemo<DimensionValue>(() => `${((step + 1) / lessons.length) * 100}%`, [step]);
+  const progress = useMemo<DimensionValue>(() => `${66.666 + ((step + 1) / lessons.length) * 33.334}%`, [step]);
 
   const finish = async (name: string) => {
     setLoading(true);
@@ -100,7 +100,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
       <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {step === 0 ? <View style={styles.mascotStage}>
           <View style={styles.halo} />
-          <PlushieScene mascotType={user.mascotType} accessories={[]} autoRotate />
+          <PlushieScene mascotType={user.mascotType} accessories={[]} autoRotate={false} />
           <View style={styles.revealPill}><Ionicons name="radio" size={15} color={colors.forest} /><Text style={styles.revealText}>{wristbandLabels[user.wristbandColor]} · {animalLabels[user.mascotType]}</Text></View>
         </View> : <TutorialIllustration step={step} mascotType={user.mascotType} />}
         <View style={styles.copy}>
@@ -133,7 +133,7 @@ function TutorialPoints({ step }: { step: number }) {
     : step === 2
       ? [['camera-outline', 'Capture evidence inside novo'], ['map-outline', 'Discover nearby events and machines'], ['shield-checkmark-outline', 'AI or staff verifies submissions']]
       : [['shirt-outline', 'Equip digital accessories'], ['people-outline', 'Share progress with friends'], ['gift-outline', 'Spend leaves on rewards and impact']];
-  return <View style={styles.pointList}>{points.map(([icon, label]) => <View key={label} style={styles.pointRow}><View style={styles.pointIcon}><Ionicons name={icon as never} size={20} color={colors.forest} /></View><Text style={styles.pointText}>{label}</Text><Ionicons name="checkmark-circle" size={20} color={colors.forest} /></View>)}</View>;
+  return <View style={styles.pointList}>{points.map(([icon, label]) => <View key={label} style={styles.pointRow}><View style={styles.pointIcon}><Ionicons name={icon as never} size={20} color={colors.forest} /></View><Text style={styles.pointText}>{label}</Text><Ionicons name="ellipse" size={7} color={colors.forest} /></View>)}</View>;
 }
 
 const styles = StyleSheet.create({

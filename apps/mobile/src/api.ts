@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { AccessoryId, AccountStatus, AuthResult, Friend, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from './types';
+import { AccessoryId, AccountStatus, AuthResult, Friend, ImpactSummary, MarketItem, NotificationPreferences, NovoEvent, NovoLocation, OAuthProvider, TaskSubmission, User, WeeklyCompetition } from './types';
 
 const PRODUCTION_API_URL = 'https://novo.tancheetiong.com/api';
 
@@ -199,6 +199,15 @@ export async function getWristbandPickupLocations(token: string, coordinates?: {
   return result.lockers;
 }
 
+export async function getPilotCapabilities(token: string) {
+  return request<{ wristbandBypass: boolean; dataClassification: string }>('/member/pilot-capabilities', undefined, token);
+}
+
+export async function usePilotWristbandBypass(token: string): Promise<User> {
+  const result = await request<{ user: User }>('/member/wristband/pilot-bypass', { method: 'POST' }, token);
+  return result.user;
+}
+
 export async function getFriends(token: string): Promise<Friend[]> {
   const result = await request<{ friends: Friend[] }>('/member/friends', undefined, token);
   return result.friends;
@@ -211,6 +220,10 @@ export async function addFriend(token: string, friendId: string): Promise<User> 
 
 export async function getMemberTasks(token: string) {
   return request<{ quests: User['dailyQuests']; events: NovoEvent[]; submissions: TaskSubmission[]; weeklyCompetition: WeeklyCompetition }>('/member/tasks', undefined, token);
+}
+
+export async function getMemberImpact(token: string) {
+  return request<ImpactSummary>('/member/impact', undefined, token);
 }
 
 export async function startWeeklyCompetition(token: string) {
