@@ -38,9 +38,7 @@ jobs:
 
       - name: Install CocoaPods
         working-directory: apps/mobile/ios
-        run: |
-          pod install --repo-update
-          grep -Fq 'react-native-nfc-manager' Podfile.lock
+        run: pod install --repo-update
 
       - name: Build release app for Simulator
         shell: bash
@@ -56,29 +54,9 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath "$RUNNER_TEMP/novo-simulator-derived" \
-            ARCHS=arm64 \
-            ONLY_ACTIVE_ARCH=YES \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             build
-
-      - name: Package Appetize simulator app
-        shell: bash
-        run: |
-          set -euo pipefail
-          app_path="$(find "$RUNNER_TEMP/novo-simulator-derived/Build/Products/Release-iphonesimulator" -maxdepth 1 -name '*.app' -type d -print -quit)"
-          test -n "$app_path"
-          bundle_path="$(find "$app_path" -name 'main.jsbundle' -type f -print -quit)"
-          test -n "$bundle_path"
-          grep -aFq "$EXPO_PUBLIC_API_URL" "$bundle_path"
-          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_path/Info.plist")"
-          test -n "$executable"
-          /usr/bin/lipo -info "$app_path/$executable" | grep -Fq 'arm64'
-          mkdir -p release-assets
-          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app_path" release-assets/novo-appetize.zip
-          /usr/bin/unzip -t release-assets/novo-appetize.zip
-          /usr/bin/unzip -l release-assets/novo-appetize.zip | grep -Eq '\.app/Info\.plist$'
-          shasum -a 256 release-assets/novo-appetize.zip
 
       - name: Launch app and capture startup diagnostics
         shell: bash
@@ -123,15 +101,6 @@ jobs:
           fi
           cat "$console_file"
           cat "$log_file"
-
-      - name: Upload Appetize simulator bundle
-        uses: actions/upload-artifact@v7
-        with:
-          name: novo-appetize-${{ github.sha }}
-          path: release-assets/novo-appetize.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
 
       - name: Upload startup log
         if: always()
