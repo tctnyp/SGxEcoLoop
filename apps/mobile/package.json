@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "expo start",
     "web": "expo start --web",
-    "export:web": "expo export --platform web --output-dir dist-web --clear",
+    "export:web": "expo export --platform web --output-dir dist-web --clear && node scripts/copyMapLibreWorker.cjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "build:apk": "powershell -ExecutionPolicy Bypass -File ../../scripts/build-apk.ps1",
@@ -50,7 +50,7 @@
     "expo-status-bar": "~2.0.1",
     "expo-system-ui": "~4.0.9",
     "expo-web-browser": "~14.0.2",
-    "maplibre-gl": "5.24.0",
+    "maplibre-gl": "^6.11.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.9",
@@ -64,8 +64,19 @@
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "@babel/plugin-transform-class-static-block": "^7.29.7",
     "@types/react": "~18.3.12",
     "@types/three": "^0.170.0",
     "typescript": "^5.7.3"
+  },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-nfc-manager"
+        ],
+        "listUnknownPackages": false
+      }
+    }
   }
 }

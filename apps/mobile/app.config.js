@@ -1,4 +1,3 @@
-const baseConfig = require('./app.json').expo;
 const PRODUCTION_API_URL = 'https://novo.tancheetiong.com/api';
 const BETA_API_URL = 'https://novodev.tancheetiong.com/api';
 const EAS_PROJECT_ID = '428f6517-bea5-40fc-ae1f-549e9b3a5742';
@@ -19,17 +18,17 @@ if (['beta', 'production'].includes(buildEnvironment) && !apiUrl?.startsWith('ht
 
 const appName = buildEnvironment === 'development' ? 'novo Development' : buildEnvironment === 'beta' ? 'novo Beta' : 'novo';
 
-module.exports = {
-  ...baseConfig,
+module.exports = ({ config }) => ({
+  ...config,
   name: appName,
   owner: 'zaviergpt',
   extra: {
-    ...(baseConfig.extra || {}),
+    ...(config.extra || {}),
     ...(apiUrl ? { apiUrl } : {}),
     buildEnvironment,
     eas: {
-      ...(baseConfig.extra?.eas || {}),
+      ...(config.extra?.eas || {}),
       projectId: EAS_PROJECT_ID,
     },
   },
-};
+});
