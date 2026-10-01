@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   ApiError,
@@ -79,7 +79,9 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
     <View style={styles.startupStage}>
       <View style={styles.startupLockup}>
         <Animated.View style={[styles.startupMark, { transform: [{ translateX: markX }, { translateY: markY }, { rotate: markRotation }, { scale: markScale }] }]}>
-          <Image source={require('./assets/icon.png')} resizeMode="contain" style={styles.startupMarkImage} />
+          <View style={styles.startupLeaf}>
+            <View style={styles.startupLeafVein} />
+          </View>
         </Animated.View>
         <Animated.View style={[styles.startupWordReveal, { width: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, 112] }), opacity: reveal }]}>
           <Text numberOfLines={1} style={styles.startupWord}>novo</Text>
@@ -523,8 +525,9 @@ const styles = StyleSheet.create({
   startupScreen: { ...StyleSheet.absoluteFillObject, zIndex: 1000, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
   startupStage: { width: 240, height: 96, alignItems: 'center', justifyContent: 'center' },
   startupLockup: { height: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  startupMark: { zIndex: 3, width: 54, height: 54, borderRadius: 17, overflow: 'hidden', shadowColor: '#DFFC76', shadowOpacity: 0.2, shadowRadius: 12 },
-  startupMarkImage: { width: '100%', height: '100%' },
+  startupMark: { zIndex: 3, width: 54, height: 54, alignItems: 'center', justifyContent: 'center' },
+  startupLeaf: { width: 35, height: 45, borderTopLeftRadius: 31, borderTopRightRadius: 7, borderBottomLeftRadius: 8, borderBottomRightRadius: 31, backgroundColor: '#DFFC76', transform: [{ rotate: '11deg' }], overflow: 'hidden' },
+  startupLeafVein: { position: 'absolute', width: 2, height: 35, left: 17, top: 11, borderRadius: 2, backgroundColor: 'rgba(23,53,42,0.32)', transform: [{ rotate: '-40deg' }] },
   startupWordReveal: { height: 54, overflow: 'hidden', justifyContent: 'center' },
   startupWord: { width: 112, paddingLeft: 10, color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 39, lineHeight: 48, fontWeight: '800', letterSpacing: -1.6 },
   startupLoader: { position: 'absolute', bottom: '19%', minHeight: 72, alignItems: 'center', justifyContent: 'center', gap: 7 },
