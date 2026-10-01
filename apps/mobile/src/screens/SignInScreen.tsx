@@ -149,7 +149,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
           </View>
 
           <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard, tinyViewport && !keyboardVisible && styles.panelCompactTiny]}>
-            <View style={[styles.panelContent, constrained && styles.panelContentKeyboard]}>
+            <View style={[styles.panelContent, constrained && styles.panelContentKeyboard, step === 'password' && !recovering && styles.panelContentPassword]}>
               <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
                 <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
                 <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
@@ -217,17 +217,18 @@ const styles = StyleSheet.create({
   heroBodyKeyboard: { fontSize: 12, lineHeight: 16, marginTop: 5 },
   heroDecorOne: { position: 'absolute', width: 150, height: 150, right: -56, bottom: -72, borderRadius: 75, backgroundColor: 'rgba(207,244,102,0.14)' },
   heroDecorTwo: { position: 'absolute', width: 58, height: 58, right: 36, top: 78, borderRadius: 22, transform: [{ rotate: '18deg' }], backgroundColor: 'rgba(255,255,255,0.08)' },
-  heroFooter: { position: 'absolute', left: 22, right: 22, bottom: 14, color: '#D0DED5', fontSize: 11, lineHeight: 15, fontWeight: '500' },
+  heroFooter: { position: 'absolute', left: 22, right: 22, bottom: 30, color: '#D0DED5', fontSize: 11, lineHeight: 15, fontWeight: '500' },
   heroFooterWide: { position: 'relative', left: 0, bottom: 0, width: '100%', textAlign: 'center', fontSize: 12, lineHeight: 17 },
   heroFooterShort: { display: 'none' },
   panel: { position: 'relative', width: '100%', maxWidth: 520, backgroundColor: colors.cream },
   panelCompact: { flex: 1, maxWidth: 560, marginTop: -16, paddingHorizontal: 24, paddingVertical: 18, borderTopLeftRadius: 32, borderTopRightRadius: 32, zIndex: 3, justifyContent: 'center' },
   panelCompactShort: { paddingVertical: 12 },
-  panelCompactKeyboard: { paddingTop: 16, paddingBottom: 10, justifyContent: 'flex-start' },
+  panelCompactKeyboard: { paddingTop: 14, paddingBottom: 14, justifyContent: 'center' },
   panelCompactTiny: { paddingVertical: 10 },
   panelWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopRightRadius: 32, borderBottomRightRadius: 32, paddingHorizontal: 70, justifyContent: 'center', shadowColor: colors.shadow, shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.08, shadowRadius: 30, elevation: 4 },
   panelContent: { width: '100%' },
   panelContentKeyboard: { flexShrink: 1 },
+  panelContentPassword: { maxWidth: 520, alignSelf: 'center' },
   formHeader: { marginBottom: 16 },
   formHeaderKeyboard: { marginBottom: 10 },
   title: { color: colors.ink, fontSize: 29, lineHeight: 34, fontWeight: '900', letterSpacing: -1.2 },

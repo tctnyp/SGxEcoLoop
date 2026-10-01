@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, AppState, Easing, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   ApiError,
@@ -31,7 +31,6 @@ import {
   warmAppCache,
 } from './src/api';
 import { AppErrorBoundary } from './src/components/AppErrorBoundary';
-import { Logo } from './src/components/Logo';
 import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
@@ -51,20 +50,17 @@ const isShowcaseDemo = () => Platform.OS === 'web'
 
 function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitComplete }: { introComplete: boolean; message: string; ready: boolean; onIntroComplete: () => void; onExitComplete: () => void }) {
   const fall = useRef(new Animated.Value(0)).current;
-  const brand = useRef(new Animated.Value(0)).current;
+  const reveal = useRef(new Animated.Value(0)).current;
   const exit = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const animation = Animated.parallel([
-      Animated.timing(fall, { toValue: 1, duration: 1_250, easing: Easing.bezier(0.18, 0.72, 0.28, 1), useNativeDriver: true }),
-      Animated.sequence([
-        Animated.delay(760),
-        Animated.spring(brand, { toValue: 1, damping: 13, stiffness: 115, mass: 0.8, useNativeDriver: true }),
-      ]),
+    const animation = Animated.sequence([
+      Animated.timing(fall, { toValue: 1, duration: 1_050, easing: Easing.bezier(0.16, 0.76, 0.26, 1), useNativeDriver: true }),
+      Animated.spring(reveal, { toValue: 1, damping: 16, stiffness: 150, mass: 0.72, useNativeDriver: false }),
     ]);
     animation.start(({ finished }) => { if (finished) onIntroComplete(); });
     return () => animation.stop();
-  }, [brand, fall, onIntroComplete]);
+  }, [fall, onIntroComplete, reveal]);
 
   useEffect(() => {
     if (!ready) return undefined;
@@ -73,16 +69,22 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
     return () => { clearTimeout(timeout); animation.stop(); };
   }, [exit, onExitComplete, ready]);
 
-  const leafRotation = fall.interpolate({ inputRange: [0, 0.16, 0.34, 0.52, 0.7, 0.86, 1], outputRange: ['-64deg', '34deg', '-29deg', '25deg', '-17deg', '9deg', '0deg'] });
-  const leafX = fall.interpolate({ inputRange: [0, 0.16, 0.34, 0.52, 0.7, 0.86, 1], outputRange: [-40, 33, -27, 22, -14, 7, 0] });
-  const leafY = fall.interpolate({ inputRange: [0, 0.88, 0.95, 1], outputRange: [-330, 58, 47, 52] });
-  const leafScale = fall.interpolate({ inputRange: [0, 0.4, 0.82, 1], outputRange: [0.82, 1.08, 0.94, 1] });
+  const markRotation = fall.interpolate({ inputRange: [0, 0.18, 0.38, 0.58, 0.76, 0.9, 1], outputRange: ['-42deg', '24deg', '-18deg', '13deg', '-8deg', '4deg', '0deg'] });
+  const markX = fall.interpolate({ inputRange: [0, 0.18, 0.38, 0.58, 0.76, 0.9, 1], outputRange: [-34, 27, -20, 14, -8, 4, 0] });
+  const markY = fall.interpolate({ inputRange: [0, 0.82, 0.91, 0.97, 1], outputRange: [-430, 12, -7, 3, 0] });
+  const markScale = fall.interpolate({ inputRange: [0, 0.74, 0.88, 1], outputRange: [0.76, 1.06, 0.96, 1] });
 
   return <Animated.View style={[styles.startupScreen, { opacity: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }), transform: [{ scale: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]} accessibilityLabel={introComplete ? message : 'novo is starting'}>
     <StatusBar style="light" />
     <View style={styles.startupStage}>
-      <Animated.View style={[styles.startupLeaf, { transform: [{ translateX: leafX }, { translateY: leafY }, { rotate: leafRotation }, { scale: leafScale }] }]}><View style={styles.startupLeafShape} /></Animated.View>
-      <Animated.View style={[styles.startupBrand, { opacity: brand, transform: [{ scale: brand.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) }] }]}><Logo inverse /></Animated.View>
+      <View style={styles.startupLockup}>
+        <Animated.View style={[styles.startupMark, { transform: [{ translateX: markX }, { translateY: markY }, { rotate: markRotation }, { scale: markScale }] }]}>
+          <Image source={require('./assets/icon.png')} resizeMode="contain" style={styles.startupMarkImage} />
+        </Animated.View>
+        <Animated.View style={[styles.startupWordReveal, { width: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, 112] }), opacity: reveal }]}>
+          <Text numberOfLines={1} style={styles.startupWord}>novo</Text>
+        </Animated.View>
+      </View>
     </View>
     {introComplete ? <View style={styles.startupLoader} accessibilityLiveRegion="polite"><ActivityIndicator size="small" color="#DFFC76" /><Text style={styles.startupMessage}>{message}</Text><Text style={styles.startupHint}>Preparing your map, quests and rewards</Text></View> : <View style={styles.startupLoaderPlaceholder} />}
   </Animated.View>;
@@ -519,10 +521,12 @@ const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
   appContent: { flex: 1 },
   startupScreen: { ...StyleSheet.absoluteFillObject, zIndex: 1000, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
-  startupStage: { width: 240, height: 150, alignItems: 'center', justifyContent: 'flex-end' },
-  startupLeaf: { position: 'absolute', top: 38, zIndex: 3 },
-  startupLeafShape: { width: 32, height: 46, borderTopLeftRadius: 30, borderBottomRightRadius: 30, backgroundColor: '#DFFC76', transform: [{ rotate: '18deg' }], shadowColor: '#DFFC76', shadowOpacity: 0.24, shadowRadius: 12 },
-  startupBrand: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  startupStage: { width: 240, height: 96, alignItems: 'center', justifyContent: 'center' },
+  startupLockup: { height: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  startupMark: { zIndex: 3, width: 54, height: 54, borderRadius: 17, overflow: 'hidden', shadowColor: '#DFFC76', shadowOpacity: 0.2, shadowRadius: 12 },
+  startupMarkImage: { width: '100%', height: '100%' },
+  startupWordReveal: { height: 54, overflow: 'hidden', justifyContent: 'center' },
+  startupWord: { width: 112, paddingLeft: 10, color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 39, lineHeight: 48, fontWeight: '800', letterSpacing: -1.6 },
   startupLoader: { position: 'absolute', bottom: '19%', minHeight: 72, alignItems: 'center', justifyContent: 'center', gap: 7 },
   startupLoaderPlaceholder: { position: 'absolute', bottom: '19%', height: 72 },
   startupMessage: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 14, fontWeight: '700' },
