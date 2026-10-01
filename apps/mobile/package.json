@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "expo start",
     "web": "expo start --web",
+    "export:web": "expo export --platform web --output-dir dist-web --clear",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "build:apk": "powershell -ExecutionPolicy Bypass -File ../../scripts/build-apk.ps1",

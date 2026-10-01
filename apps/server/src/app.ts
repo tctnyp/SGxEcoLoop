@@ -2,6 +2,7 @@ import cors from 'cors';
 import express, { NextFunction, Request, Response } from 'express';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
 import { z } from 'zod';
@@ -1479,6 +1480,23 @@ app.post('/api/auth/sign-in', async (request, response, next) => {
   }
 });
 
+app.post('/api/auth/showcase-demo', async (_request, response, next) => {
+  try {
+    const email = (process.env.NOVO_SHOWCASE_DEMO_EMAIL || 'amira.tan@demo.novo.sg').trim().toLowerCase();
+    if (!email.endsWith('@demo.novo.sg')) return response.status(503).json({ message: 'The showcase demo account is not configured safely.' });
+    const user = users.get(email);
+    const account = findPortalAccountByEmail(email);
+    if (!user || !account || account.role !== 'member') return response.status(503).json({ message: 'The showcase demo account is not ready yet.' });
+    if (account.status !== 'active') return response.status(503).json({ message: 'The showcase demo account is temporarily unavailable.' });
+    const token = createMobileSession(user.id);
+    await persistDatabase(persistedCollections);
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ isNewUser: false, token, user, accountStatus: account.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/auth/web-sign-in', async (request, response, next) => {
   try {
     const { email, password } = signInSchema.parse(request.body);
@@ -2657,6 +2675,16 @@ app.delete('/api/portal/accounts/:accountId', requirePortalRole('admin'), (reque
   for (const [token, value] of mobileHandoffs) if (value.userId === accountId) mobileHandoffs.delete(token);
   response.status(204).send();
 });
+
+const mobileWebDistPath = fileURLToPath(new URL('../../mobile/dist-web/', import.meta.url));
+if (existsSync(mobileWebDistPath)) {
+  app.use('/_expo', express.static(join(mobileWebDistPath, '_expo'), { immutable: true, maxAge: '1y' }));
+  app.use('/assets', express.static(join(mobileWebDistPath, 'assets'), { immutable: true, maxAge: '1y' }));
+  app.get(['/demo', '/demo/'], (_request, response) => {
+    response.setHeader('Cache-Control', 'no-cache');
+    response.sendFile('index.html', { root: mobileWebDistPath });
+  });
+}
 
 const webDistPath = fileURLToPath(new URL('../../web/dist/', import.meta.url));
 if (existsSync(webDistPath)) {

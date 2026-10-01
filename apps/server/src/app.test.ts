@@ -34,6 +34,24 @@ describe('novo API', () => {
     assert.equal(response.body.user, undefined);
   });
 
+  it('opens the hosted Expo showcase directly in a configured demo member session', async () => {
+    const { user } = await createMember('showcase@demo.novo.sg', 'Showcase Member');
+    process.env.NOVO_SHOWCASE_DEMO_EMAIL = user.email;
+    try {
+      const opened = await request(app).post('/api/auth/showcase-demo');
+      assert.equal(opened.status, 200);
+      assert.equal(opened.body.isNewUser, false);
+      assert.equal(opened.body.user.id, user.id);
+      assert.ok(opened.body.token);
+      assert.match(opened.headers['cache-control'], /no-store/);
+      const restored = await request(app).get('/api/auth/mobile-session').set('authorization', `Bearer ${opened.body.token}`);
+      assert.equal(restored.status, 200);
+      assert.equal(restored.body.user.id, user.id);
+    } finally {
+      delete process.env.NOVO_SHOWCASE_DEMO_EMAIL;
+    }
+  });
+
   it('creates and links a new member from a verified mobile OAuth handoff without asking for a password', async () => {
     process.env.GOOGLE_WEB_CLIENT_ID = 'google-test-client';
     process.env.GOOGLE_CLIENT_SECRET = 'google-test-secret';

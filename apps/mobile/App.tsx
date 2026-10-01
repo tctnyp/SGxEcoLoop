@@ -23,6 +23,7 @@ import {
   revokeSession,
   restoreMobileSession,
   setAccountStatusListener,
+  startShowcaseDemo,
   startLinkedAccount,
   updateMemberProfile,
   changeMemberPassword,
@@ -44,6 +45,9 @@ const SESSION_KEY = 'novo-mobile-session';
 const LAST_PROFILE_KEY = 'novo-last-profile';
 const profileKey = (email: string) => `novo-profile:${email.toLowerCase()}`;
 const homeGuideKey = (userId: string) => `novo-home-guide:${userId}`;
+const isShowcaseDemo = () => Platform.OS === 'web'
+  && typeof window !== 'undefined'
+  && /^\/demo\/?$/.test(window.location.pathname);
 
 function StartupScreen({ introComplete, message, onIntroComplete }: { introComplete: boolean; message: string; onIntroComplete: () => void }) {
   const fall = useRef(new Animated.Value(0)).current;
@@ -216,7 +220,8 @@ function NovoApp() {
 
     const restore = async () => {
       try {
-        const storedToken = await AsyncStorage.getItem(SESSION_KEY);
+        const demoMode = isShowcaseDemo();
+        const storedToken = demoMode ? null : await AsyncStorage.getItem(SESSION_KEY);
         while (mounted) {
           try {
             setBootMessage('Loading your novo world…');
@@ -228,6 +233,21 @@ function NovoApp() {
           }
         }
         if (!mounted) return;
+        if (demoMode) {
+          while (mounted) {
+            try {
+              setBootMessage('Opening the novo demo…');
+              const demoSession = await startShowcaseDemo();
+              if (demoSession.token) await warmAppCache(demoSession.token);
+              await handleAuth(demoSession);
+              return;
+            } catch {
+              setBootMessage('Preparing the demo account…');
+              await new Promise((resolve) => setTimeout(resolve, 3_000));
+            }
+          }
+          return;
+        }
         setBootMessage('Restoring your progress…');
         const initialUrl = await Linking.getInitialURL();
         if (await exchangeHandoffUrl(initialUrl)) return;

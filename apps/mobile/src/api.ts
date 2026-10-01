@@ -132,6 +132,10 @@ export function signIn(email: string, password: string): Promise<AuthResult> {
   });
 }
 
+export function startShowcaseDemo(): Promise<AuthResult> {
+  return request<AuthResult>('/auth/showcase-demo', { method: 'POST' });
+}
+
 export function checkEmailStatus(email: string): Promise<{ exists: boolean }> {
   return request<{ exists: boolean }>('/auth/email-status', {
     method: 'POST',
