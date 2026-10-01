@@ -1,0 +1,19 @@
+{
+  "name": "novo Events",
+  "short_name": "novo",
+  "description": "Fast NFC attendance for novo community events.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#F7F9F3",
+  "theme_color": "#17352A",
+  "icons": [
+    {
+      "src": "/novo-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

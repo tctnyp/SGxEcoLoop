@@ -545,7 +545,7 @@ describe('novo API', () => {
     assert.equal((await request(app).post('/api/member/weekly/complete').set('authorization', member.authorization).send({ answers })).status, 409);
   });
 
-  it('allows an organizer to verify attendance by paired wristband during the event window', async () => {
+  it('runs rapid, idempotent NFC attendance and adds the event to member impact', async () => {
     const member = await createMember('attendee@example.com');
     const startsAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const created = await request(app).post('/api/portal/events').set('x-novo-role', 'organizer').send({ organizerId: 'organizer', title: 'Community repair circle', location: 'Bedok Community Centre', startsAt, durationMinutes: 120, capacity: null, points: 140, status: 'open' });
@@ -564,8 +564,40 @@ describe('novo API', () => {
     assert.equal(checkedIn.status, 200);
     assert.deepEqual(checkedIn.body.event.checkedInUserIds, [member.user.id]);
     assert.equal(checkedIn.body.pointsAwarded, 140);
+    assert.equal(checkedIn.body.duplicate, false);
+    assert.equal(checkedIn.body.walkIn, false);
     const repeated = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ tagToken });
-    assert.equal(repeated.status, 409);
+    assert.equal(repeated.status, 200);
+    assert.equal(repeated.body.duplicate, true);
+    assert.equal(repeated.body.pointsAwarded, 0);
+    const attendance = await request(app).get(`/api/portal/events/${created.body.event.id}/attendance`).set('x-novo-role', 'organizer');
+    assert.equal(attendance.status, 200);
+    assert.equal(attendance.body.event.checkedIn, 1);
+    assert.equal(attendance.body.attendees[0].checkedIn, true);
+    const impact = await request(app).get('/api/member/impact').set('authorization', member.authorization);
+    assert.equal(impact.body.events.totalJoined, 1);
+    assert.equal(impact.body.events.joined[0].id, created.body.event.id);
+  });
+
+  it('admits a wristband walk-in when the organizer allows it', async () => {
+    const member = await createMember('walkin@example.com');
+    const created = await request(app).post('/api/portal/events').set('x-novo-role', 'organizer').send({ organizerId: 'organizer', title: 'Neighbourhood swap circle', location: 'Tampines Hub', startsAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(), durationMinutes: 90, capacity: 20, points: 80, allowWalkIns: true, status: 'open' });
+    const provisioned = await request(app).post('/api/portal/nfc-tags').set('x-novo-role', 'staff').send({ label: 'WALK-IN-BAND', wristbandColor: 'tropical-green' });
+    const tagToken = provisioned.body.tag.token;
+    await request(app).post('/api/member/wristband/pair').set('authorization', member.authorization).send({ tagToken, pickupLocation: 'Pick! Locker @ Tampines' });
+    const checkedIn = await request(app).post(`/api/portal/events/${created.body.event.id}/check-in`).set('x-novo-role', 'organizer').send({ tagToken });
+    assert.equal(checkedIn.status, 200);
+    assert.equal(checkedIn.body.walkIn, true);
+    assert.equal(checkedIn.body.event.attendees.length, 1);
+  });
+
+  it('publishes event locations and anonymous live activity without user identity', async () => {
+    const live = await request(app).get('/api/showcase/live');
+    assert.equal(live.status, 200);
+    assert.ok(Array.isArray(live.body.events));
+    assert.ok(Array.isArray(live.body.activities));
+    assert.equal(JSON.stringify(live.body).includes('walkin@example.com'), false);
+    assert.equal(JSON.stringify(live.body).includes('Walk-in'), false);
   });
 
   it('allows members to cancel a future event registration', async () => {

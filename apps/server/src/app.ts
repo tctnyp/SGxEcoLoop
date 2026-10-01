@@ -62,6 +62,7 @@ type MascotType = 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird';
 
 type PortalRole = 'organizer' | 'staff' | 'admin';
 type AccountStatus = 'active' | 'limited' | 'suspended';
+type EventCheckIn = { userId: string; checkedInAt: string; checkedInBy: string; pointsAwarded: number; walkIn: boolean };
 type PortalEvent = {
   id: string;
   organizerId: string;
@@ -73,6 +74,8 @@ type PortalEvent = {
   points: number;
   attendees: string[];
   checkedInUserIds: string[];
+  checkIns?: EventCheckIn[];
+  allowWalkIns?: boolean;
   status: 'draft' | 'open' | 'completed';
   latitude: number | null;
   longitude: number | null;
@@ -314,6 +317,21 @@ function showcaseMetrics() {
     eventCheckIns,
     upcomingEvents: [...portalEvents.values()].filter((event) => event.status === 'open' && Date.parse(event.startsAt) + event.durationMinutes * 60_000 >= now).length,
   };
+}
+
+function showcaseLiveView() {
+  const now = Date.now();
+  const participantIds = new Set([...users.values()].filter((user) => !user.email.toLowerCase().endsWith('@demo.novo.sg')).map((user) => user.id));
+  const events = [...portalEvents.values()]
+    .filter((event) => event.status === 'open' && Date.parse(event.startsAt) + event.durationMinutes * 60_000 >= now - 2 * 60 * 60_000)
+    .filter((event) => typeof event.latitude === 'number' && typeof event.longitude === 'number')
+    .sort((left, right) => left.startsAt.localeCompare(right.startsAt))
+    .map((event) => ({ id: event.id, title: event.title, location: event.location, startsAt: event.startsAt, durationMinutes: event.durationMinutes, points: event.points, attending: event.attendees.length, checkedIn: event.checkedInUserIds.length, latitude: event.latitude, longitude: event.longitude, organizerName: event.organizerName ?? 'novo community' }));
+  const questActivity = [...submissions.values()]
+    .filter((submission) => participantIds.has(submission.userId) && submission.status === 'approved')
+    .map((submission) => ({ id: `quest:${submission.id}`, type: 'quest' as const, title: submission.task, points: submission.points ?? 0, occurredAt: submission.reviewedAt ?? submission.createdAt }));
+  const eventActivity = [...portalEvents.values()].flatMap((event) => (event.checkIns ?? []).filter((checkIn) => participantIds.has(checkIn.userId)).map((checkIn) => ({ id: `event:${event.id}:${checkIn.userId}`, type: 'event' as const, title: event.title, points: checkIn.pointsAwarded, occurredAt: checkIn.checkedInAt })));
+  return { generatedAt: new Date().toISOString(), metrics: showcaseMetrics(), events, activities: [...questActivity, ...eventActivity].sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)).slice(0, 12) };
 }
 
 function inferLegacyImpact(submission: Submission) {
@@ -570,6 +588,11 @@ const databaseReady = initializeDatabase(databaseCollections).then(async () => {
   }
   for (const event of portalEvents.values()) {
     event.checkedInUserIds ??= [];
+    if (event.allowWalkIns === undefined) { event.allowWalkIns = true; changed = true; }
+    if (!Array.isArray(event.checkIns)) {
+      event.checkIns = event.checkedInUserIds.map((userId) => ({ userId, checkedInAt: event.startsAt, checkedInBy: event.organizerId, pointsAwarded: event.points, walkIn: false }));
+      changed = true;
+    }
     const attendees = [...new Set(event.attendees)].filter((userId) => validUserIds.has(userId));
     const checkedInUserIds = [...new Set(event.checkedInUserIds)].filter((userId) => attendees.includes(userId));
     if (attendees.length !== event.attendees.length) { event.attendees = attendees; changed = true; }
@@ -664,6 +687,7 @@ const eventSchema = z.object({
   durationMinutes: z.number().int().min(15).max(1440),
   capacity: z.number().int().positive().max(10000).nullable(),
   points: z.number().int().min(0).max(5000),
+  allowWalkIns: z.boolean().default(true),
   status: z.enum(['draft', 'open', 'completed']).default('draft'),
   latitude: z.number().min(-90).max(90).nullable().optional(),
   longitude: z.number().min(-180).max(180).nullable().optional(),
@@ -1259,6 +1283,7 @@ function memberEventView(event: PortalEvent, user: User, now = Date.now()) {
     points: event.points,
     attending: event.attendees.length,
     registered: event.attendees.includes(user.id),
+    attended: event.checkedInUserIds.includes(user.id),
     status: Date.parse(event.startsAt) <= now ? 'live' as const : 'scheduled' as const,
     latitude: event.latitude,
     longitude: event.longitude,
@@ -1270,7 +1295,15 @@ function memberEventView(event: PortalEvent, user: User, now = Date.now()) {
 
 export const app = express();
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://tiles.openfreemap.org'],
+      connectSrc: ["'self'", 'https://tiles.openfreemap.org'],
+      workerSrc: ["'self'", 'blob:'],
+    },
+  },
+}));
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(',') ?? true }));
 app.use(express.json({ limit: '10mb' }));
 app.use((request, response, next) => {
@@ -1319,6 +1352,11 @@ app.get('/api/health', (_request, response) => {
 
 app.get('/api/showcase/metrics', (_request, response) => {
   response.json(showcaseMetrics());
+});
+
+app.get('/api/showcase/live', (_request, response) => {
+  response.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=15');
+  response.json(showcaseLiveView());
 });
 
 app.get('/api/auth/providers', (_request, response) => {
@@ -1836,11 +1874,13 @@ app.get('/api/member/impact', (request, response) => {
   if (!user) return response.status(401).json({ message: 'Member sign-in required.' });
   const userDonations = [...donations.values()].filter((donation) => donation.userId === user.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const entries = [...weeklyEntries.values()].filter((entry) => entry.userId === user.id).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  const joinedEvents = [...portalEvents.values()].filter((event) => event.checkedInUserIds.includes(user.id)).sort((left, right) => right.startsAt.localeCompare(left.startsAt)).map((event) => ({ id: event.id, title: event.title, location: event.location, startsAt: event.startsAt, points: event.points, organizerName: event.organizerName ?? 'novo community' }));
   response.json({
     personal: user.impact,
     community: communityImpact(),
     foodCo2eMethod: FOOD_CO2E_FACTOR,
     rewards: { charityContributions: userDonations, redemptions: user.coupons, weeklyEntries: entries },
+    events: { totalJoined: joinedEvents.length, joined: joinedEvents },
     education: [
       { title: 'Food waste in Singapore', stat: '790,000 tonnes generated in 2025; 18% recycled', source: 'National Environment Agency', sourceUrl: 'https://www.nea.gov.sg/our-services/waste-management/3r-programmes-and-resources/food-waste-management' },
       { title: 'Plastic waste baseline', stat: '957,000 tonnes generated in 2023; 5% recycled', source: 'National Environment Agency', sourceUrl: 'https://www.nea.gov.sg/docs/default-source/default-document-library/waste-and-recycling-statistics-2014-to-2023.pdf' },
@@ -2213,6 +2253,19 @@ app.get('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'), 
   response.json({ events });
 });
 
+app.get('/api/portal/events/:eventId/attendance', requirePortalRole('organizer', 'admin'), (request, response) => {
+  const event = portalEvents.get(routeParam(request.params.eventId));
+  if (!event) return response.status(404).json({ message: 'Event not found.' });
+  if (!portalCanManageEvent(request, response, event)) return response.status(403).json({ message: 'Organizers can only view attendance for their own events.' });
+  const checkedByUser = new Map((event.checkIns ?? []).map((checkIn) => [checkIn.userId, checkIn]));
+  const attendees = event.attendees.map((userId) => {
+    const member = findUser(userId);
+    const checkIn = checkedByUser.get(userId);
+    return { id: userId, name: member?.name ?? 'Member', mascotName: member?.mascotName ?? null, checkedIn: Boolean(checkIn), checkedInAt: checkIn?.checkedInAt ?? null, walkIn: checkIn?.walkIn ?? false, pointsAwarded: checkIn?.pointsAwarded ?? 0 };
+  }).sort((left, right) => Number(right.checkedIn) - Number(left.checkedIn) || (right.checkedInAt ?? '').localeCompare(left.checkedInAt ?? '') || left.name.localeCompare(right.name));
+  response.json({ event: { id: event.id, title: event.title, registered: event.attendees.length, checkedIn: event.checkedInUserIds.length, capacity: event.capacity, allowWalkIns: event.allowWalkIns !== false }, attendees });
+});
+
 app.post('/api/portal/events', requirePortalRole('organizer', 'staff', 'admin'), (request, response, next) => {
   try {
     const input = eventSchema.parse(request.body);
@@ -2268,16 +2321,22 @@ app.post('/api/portal/events/:eventId/check-in', requirePortalRole('organizer', 
     const startsAt = Date.parse(event.startsAt);
     const endsAt = startsAt + event.durationMinutes * 60_000;
     const now = Date.now();
-    if (!Number.isFinite(startsAt) || now < startsAt - 30 * 60_000 || now > endsAt + 4 * 60 * 60_000) {
-      return response.status(409).json({ message: 'Attendance can be verified from 30 minutes before the event until four hours after it ends.' });
+    if (!Number.isFinite(startsAt) || now < startsAt - 2 * 60 * 60_000 || now > endsAt + 7 * 24 * 60 * 60_000) {
+      return response.status(409).json({ message: 'Attendance can be verified from two hours before the event until seven days after it ends.' });
     }
-    if (!event.attendees.includes(attendeeId)) return response.status(403).json({ message: 'This wristband owner is not registered for this event.' });
-    if (event.checkedInUserIds.includes(attendeeId)) return response.status(409).json({ message: 'This wristband has already completed attendance for this event.' });
+    const member = findUser(attendeeId);
+    const existing = (event.checkIns ?? []).find((checkIn) => checkIn.userId === attendeeId);
+    if (existing || event.checkedInUserIds.includes(attendeeId)) return response.json({ event, attendee: member ? { id: member.id, name: member.name, mascotName: member.mascotName } : { id: attendeeId }, pointsAwarded: 0, duplicate: true, walkIn: existing?.walkIn ?? false, checkedInAt: existing?.checkedInAt ?? null });
+    const walkIn = !event.attendees.includes(attendeeId);
+    if (walkIn && event.allowWalkIns === false) return response.status(403).json({ message: 'This event accepts registered attendees only.' });
+    if (walkIn && event.capacity !== null && event.attendees.length >= event.capacity) return response.status(409).json({ message: 'This event has reached capacity.' });
     event.attendees = Array.from(new Set([...event.attendees, attendeeId]));
     event.checkedInUserIds.push(attendeeId);
-    const member = findUser(attendeeId);
+    const session = sessionFromRequest(request);
+    const checkIn: EventCheckIn = { userId: attendeeId, checkedInAt: new Date().toISOString(), checkedInBy: session?.accountId ?? 'development-organizer', pointsAwarded: event.points, walkIn };
+    event.checkIns = [...(event.checkIns ?? []), checkIn];
     if (member) { member.points += event.points; member.lifetimePoints += event.points; }
-    response.json({ event, attendee: member ? { id: member.id, name: member.name, mascotName: member.mascotName } : { id: attendeeId }, pointsAwarded: event.points });
+    response.json({ event, attendee: member ? { id: member.id, name: member.name, mascotName: member.mascotName } : { id: attendeeId }, pointsAwarded: event.points, duplicate: false, walkIn, checkedInAt: checkIn.checkedInAt, achievement: 'Event explorer' });
   } catch (error) {
     next(error);
   }

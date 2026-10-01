@@ -88,6 +88,7 @@ export type NovoEvent = {
   points: number;
   attending: number;
   registered: boolean;
+  attended?: boolean;
   status: 'live' | 'scheduled';
   latitude: number | null;
   longitude: number | null;
@@ -105,6 +106,10 @@ export type ImpactSummary = {
     charityContributions: Array<{ id: string; causeName: string; points: number; createdAt: string }>;
     redemptions: RedeemedCoupon[];
     weeklyEntries: Array<{ id: string; weekId: string; startedAt: string; completedAt: string | null; pointsAwarded: number }>;
+  };
+  events: {
+    totalJoined: number;
+    joined: Array<{ id: string; title: string; location: string; startsAt: string; points: number; organizerName: string }>;
   };
   education: Array<{ title: string; stat: string; source: string; sourceUrl: string }>;
 };

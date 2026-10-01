@@ -1,7 +1,8 @@
-import { CSSProperties, FormEvent, lazy, ReactNode, Suspense, useEffect, useState } from 'react';
+import { CSSProperties, FormEvent, lazy, ReactNode, Suspense, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 
 const MascotCarousel3D = lazy(() => import('./MascotCarousel3D').then((module) => ({ default: module.MascotCarousel3D })));
+const ShowcaseLiveMap = lazy(() => import('./ShowcaseLiveMap').then((module) => ({ default: module.ShowcaseLiveMap })));
 
 type Role = 'organizer' | 'staff' | 'admin';
 type AccountRole = 'member' | Role;
@@ -12,6 +13,12 @@ type AccessoryId = 'bright-star' | 'sunny-cap' | 'petal-pin' | 'trail-scarf' | '
 type MemberProfile = { id: string; name: string; username: string; email: string; avatarDataUrl: string | null; linkedAccounts: Array<{ provider: 'google' | 'discord' | 'microsoft'; subject: string; email: string }>; mascotName: string; mascotType: 'polar-bear' | 'penguin' | 'fox' | 'turtle' | 'bird'; wristbandColor: string; wristbandPaired: boolean; wristbandPickupLocation: string | null; accessories: AccessoryId[]; equippedAccessories: AccessoryId[]; friendIds: string[]; notificationPreferences: { dailyGreeting: boolean; tasks: boolean; events: boolean; friends: boolean; orders: boolean }; streak: number; points: number; lifetimePoints: number; lastWristbandTapAt: string | null; questBoardDate: string | null; dailyQuests: Array<{ id: string; title: string; description: string; points: number; completed: boolean }> };
 type Identity = { token: string; account: { id: string; name: string; email: string; role: AccountRole; status: AccountStatus }; role: AccountRole; handoffToken?: string; member?: MemberProfile };
 type ShowcaseMetrics = { generatedAt: string; startedAt: string | null; participants: number; verifiedActions: number; divertedKg: number; eventCheckIns: number; upcomingEvents: number };
+type ShowcaseLiveEvent = { id: string; title: string; location: string; startsAt: string; durationMinutes: number; points: number; attending: number; checkedIn: number; latitude: number; longitude: number; organizerName: string };
+type ShowcaseActivity = { id: string; type: 'quest' | 'event'; title: string; points: number; occurredAt: string };
+type ShowcaseLive = { generatedAt: string; metrics: ShowcaseMetrics; events: ShowcaseLiveEvent[]; activities: ShowcaseActivity[] };
+type AttendancePerson = { id: string; name: string; mascotName: string | null; checkedIn: boolean; checkedInAt: string | null; walkIn: boolean; pointsAwarded: number };
+type AttendanceView = { event: { id: string; title: string; registered: number; checkedIn: number; capacity: number | null; allowWalkIns: boolean }; attendees: AttendancePerson[] };
+type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }> };
 
 const passwordRules = [
   { label: '9 or more characters', test: (value: string) => value.length >= 9 },
@@ -56,6 +63,7 @@ type EventItem = {
   capacity: number | null;
   attending: number;
   checkedIn: number;
+  allowWalkIns?: boolean;
   points: number;
   status: 'Open' | 'Draft' | 'Completed';
   latitude: number | null;
@@ -251,7 +259,7 @@ export function App() {
     if (!identity || identity.role === 'member') return;
     fetch('/api/portal/events', { headers: { Authorization: `Bearer ${identity.token}` } })
       .then((response) => response.json())
-      .then((result: { events?: Array<{ id: string; title: string; location: string; startsAt: string; durationMinutes: number; capacity: number | null; attendees: string[]; checkedInUserIds: string[]; points: number; status: 'draft' | 'open' | 'completed'; latitude: number | null; longitude: number | null }> }) => setEvents((result.events ?? []).map((event) => { const starts = new Date(event.startsAt); return { id: event.id, title: event.title, place: event.location, date: starts.toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }), time: starts.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit', hour12: false }), duration: event.durationMinutes >= 60 && event.durationMinutes % 60 === 0 ? `${event.durationMinutes / 60} hr` : `${event.durationMinutes} min`, capacity: event.capacity, attending: event.attendees.length, checkedIn: event.checkedInUserIds?.length ?? 0, points: event.points, status: event.status === 'open' ? 'Open' : event.status === 'draft' ? 'Draft' : 'Completed', latitude: event.latitude, longitude: event.longitude }; })))
+      .then((result: { events?: Array<{ id: string; title: string; location: string; startsAt: string; durationMinutes: number; capacity: number | null; attendees: string[]; checkedInUserIds: string[]; allowWalkIns?: boolean; points: number; status: 'draft' | 'open' | 'completed'; latitude: number | null; longitude: number | null }> }) => setEvents((result.events ?? []).map((event) => { const starts = new Date(event.startsAt); return { id: event.id, title: event.title, place: event.location, date: starts.toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }), time: starts.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit', hour12: false }), duration: event.durationMinutes >= 60 && event.durationMinutes % 60 === 0 ? `${event.durationMinutes / 60} hr` : `${event.durationMinutes} min`, capacity: event.capacity, attending: event.attendees.length, checkedIn: event.checkedInUserIds?.length ?? 0, allowWalkIns: event.allowWalkIns !== false, points: event.points, status: event.status === 'open' ? 'Open' : event.status === 'draft' ? 'Draft' : 'Completed', latitude: event.latitude, longitude: event.longitude }; })))
       .catch(() => setEvents([]));
   }, [identity]);
 
@@ -349,40 +357,55 @@ const showcaseEvents = [
 ] as const;
 
 function ShowcaseLanding({ onAuthenticated }: { onAuthenticated: (identity: Identity) => void }) {
-  const [metrics, setMetrics] = useState<ShowcaseMetrics | null>(null);
+  const [live, setLive] = useState<ShowcaseLive | null>(null);
+  const [loginOpen, setLoginOpen] = useState(() => /(?:oauth|reset)/i.test(window.location.search));
 
   useEffect(() => {
     let active = true;
-    const refresh = () => fetch('/api/showcase/metrics')
-      .then((response) => response.ok ? response.json() as Promise<ShowcaseMetrics> : Promise.reject())
-      .then((next) => { if (active) setMetrics(next); })
+    const refresh = () => fetch('/api/showcase/live')
+      .then((response) => response.ok ? response.json() as Promise<ShowcaseLive> : Promise.reject())
+      .then((next) => { if (active) setLive(next); })
       .catch(() => undefined);
     void refresh();
-    const interval = window.setInterval(refresh, 15_000);
+    const interval = window.setInterval(refresh, 10_000);
     return () => { active = false; window.clearInterval(interval); };
   }, []);
 
-  const goToLogin = () => document.getElementById('showcase-sign-in')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  useEffect(() => {
+    document.body.classList.toggle('dialog-open', loginOpen);
+    return () => document.body.classList.remove('dialog-open');
+  }, [loginOpen]);
+
+  const goToLogin = () => setLoginOpen(true);
   const stat = (value: number | undefined, suffix = '') => value === undefined ? '—' : `${new Intl.NumberFormat('en-SG', { maximumFractionDigits: 2 }).format(value)}${suffix}`;
+  const relativeTime = (value: string) => {
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1000));
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    return `${Math.floor(seconds / 3600)}h ago`;
+  };
+  const metrics = live?.metrics;
 
   return <main className="showcase-site">
-    <header className="showcase-header"><Logo operations={false}/><nav aria-label="Showcase navigation"><a href="#why">Why novo</a><a href="#how">How it works</a><a href="#mascots">Mascots</a><a href="#demo">Demo</a></nav><button className="showcase-signin" onClick={goToLogin}>Sign in</button></header>
-    <section className="showcase-live" aria-live="polite"><span className="showcase-live-label"><i/>LIVE SHOWCASE IMPACT</span><div><b>{stat(metrics?.participants)}</b><small>participants</small></div><div><b>{stat(metrics?.verifiedActions)}</b><small>verified actions</small></div><div><b>{stat(metrics?.divertedKg, ' kg')}</b><small>kept from waste</small></div><div><b>{stat(metrics?.eventCheckIns)}</b><small>event check-ins</small></div><span className="showcase-live-note">Real participant data · refreshes live</span></section>
+    <header className="showcase-header"><Logo operations={false}/><nav aria-label="Showcase navigation"><a href="#why">Why novo</a><a href="#how">How it works</a><a href="#mascots">Mascots</a><a href="#demo">Try it</a></nav><button className="showcase-signin" onClick={goToLogin}>Sign in</button></header>
 
-    <section className="showcase-hero"><div className="showcase-hero-copy"><p className="showcase-kicker">A WRISTBAND. A MASCOT. A BETTER HABIT.</p><h1>Waste less.<br/>Grow <em>wonder.</em></h1><p className="showcase-lead">novo turns sustainability from a distant goal into a daily relationship—one physical tap, one achievable quest and one visible piece of impact at a time.</p><div className="showcase-hero-actions"><a className="showcase-primary" href="/demo">Try the app demo <Icon name="arrow"/></a><button className="showcase-secondary" onClick={goToLogin}>I already use novo</button></div><div className="showcase-proof"><span><Icon name="scan"/><b>NFC touch</b><small>starts the habit</small></span><span><Icon name="spark"/><b>Daily quests</b><small>make it achievable</small></span><span><Icon name="leaf"/><b>Verified impact</b><small>makes it visible</small></span></div></div><div className="showcase-hero-art" aria-label="novo mascot app preview"><div className="showcase-orbit orbit-a"/><div className="showcase-orbit orbit-b"/><div className="showcase-phone"><div className="showcase-phone-top"><span>novo</span><b>1,240 <Icon name="leaf" size={12}/></b></div><div className="showcase-demo-glow"/><div className="css-bear showcase-bear"><i className="ear left"/><i className="ear right"/><span className="bear-head"><i/><i/><b>ᴗ</b></span><span className="bear-body"/><strong className="bear-star">★</strong></div><h3>Nova</h3><p>Polar bear · Level 6</p><div className="showcase-phone-card"><Icon name="scan"/><span><b>Ready for today’s tap</b><small>Refresh quests and protect your streak</small></span></div></div><span className="showcase-float-card float-one">🔥 12 day streak</span><span className="showcase-float-card float-two">+35 leaves</span></div></section>
+    <section className="showcase-live-stage">
+      <Suspense fallback={<div className="showcase-map showcase-map-loading"/>}><ShowcaseLiveMap events={live?.events ?? []}/></Suspense><div className="showcase-map-scrim"/>
+      <div className="showcase-live-copy"><p className="showcase-kicker"><i/> LIVE ACROSS SINGAPORE</p><h1>Small habits.<br/><em>Real change.</em></h1><p>Touch a wristband. Meet your mascot. Take one achievable action—and watch thousands of small choices add up.</p><div className="showcase-hero-actions"><a className="showcase-primary" href="/demo">Try novo <Icon name="arrow"/></a><button className="showcase-secondary" onClick={goToLogin}>Sign in</button></div></div>
+      <aside className="showcase-live-panel" aria-live="polite"><header><span><i/>LIVE IMPACT</span><small>Verified activity · no user locations</small></header><div className="showcase-live-metrics"><div><b>{stat(metrics?.participants)}</b><small>people</small></div><div><b>{stat(metrics?.verifiedActions)}</b><small>actions</small></div><div><b>{stat(metrics?.divertedKg, ' kg')}</b><small>diverted</small></div><div><b>{stat(metrics?.eventCheckIns)}</b><small>check-ins</small></div></div><div className="showcase-activity-feed"><p>HAPPENING NOW</p>{(live?.activities ?? []).slice(0, 4).map((activity) => <article key={activity.id}><span><Icon name={activity.type === 'event' ? 'calendar' : 'check'} size={15}/></span><div><b>{activity.title}</b><small>{activity.type === 'event' ? 'Event attendance verified' : 'Quest verified'} · {relativeTime(activity.occurredAt)}</small></div><strong>+{activity.points}</strong></article>)}{!live?.activities.length && <div className="showcase-feed-empty"><Icon name="leaf"/><span><b>The next action appears here.</b><small>Names and precise locations are never shown.</small></span></div>}</div></aside>
+      <div className="showcase-event-rail">{(live?.events ?? []).slice(0, 3).map((event) => <article key={event.id}><span><Icon name="pin" size={16}/></span><div><small>{new Date(event.startsAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</small><b>{event.title}</b><em>{event.location}</em></div><strong>{event.points} leaves</strong></article>)}{!live?.events.length && <article><span><Icon name="map" size={16}/></span><div><small>NEXT UP</small><b>Community events are being prepared</b><em>Check back shortly</em></div></article>}</div>
+    </section>
 
-    <section id="why" className="showcase-problem"><div className="showcase-section-copy"><p className="showcase-kicker">THE PROBLEM</p><h2>Knowing is not the same as doing.</h2><p>Young people care about the planet, but sustainable action is often invisible, inconvenient and lonely. One-off campaigns create awareness; habits need a cue, a rewarding loop and a community.</p></div><div className="showcase-problem-grid"><article><span>01</span><Icon name="clock"/><h3>Good intent fades</h3><p>Climate action competes with school, work and everyday life.</p></article><article><span>02</span><Icon name="spark"/><h3>Impact feels abstract</h3><p>A small reusable choice rarely feels connected to a larger result.</p></article><article><span>03</span><Icon name="people"/><h3>Action feels solitary</h3><p>Without shared progress, sustainable habits are harder to sustain.</p></article></div></section>
+    <section id="why" className="showcase-problem"><div className="showcase-section-copy"><p className="showcase-kicker">KNOWING ISN’T DOING</p><h2>Singapore knows how to recycle. The habit still breaks.</h2><p>novo closes the gap with a physical daily cue, a companion worth growing and progress people can actually see.</p></div><div className="showcase-problem-grid showcase-data-grid"><article><strong>78%</strong><h3>say they recycle</h3><p>Yet the household recycling rate is only 11%.</p></article><article><strong>890k</strong><h3>tonnes of plastic waste</h3><p>Only 4% of it was recycled.</p></article><article><strong>52%</strong><h3>overall recycling rate</h3><p>Down from 61% in 2015.</p></article></div><p className="showcase-evidence"><a href="https://www.nea.gov.sg/our-services/waste-management/waste-statistics-and-overall-recycling" target="_blank" rel="noreferrer">NEA waste statistics</a><span>·</span><a href="https://www.towardszerowaste.gov.sg/zero-waste-masterplan/" target="_blank" rel="noreferrer">Zero Waste Masterplan</a></p></section>
 
     <section id="how" className="showcase-loop"><div className="showcase-section-copy centered"><p className="showcase-kicker">THE NOVO LOOP</p><h2>Physical touch becomes lasting change.</h2><p>The wristband is a daily cue. The mascot makes progress emotional. Verified quests turn the moment into measurable environmental impact.</p></div><div className="showcase-loop-track"><article><span><Icon name="scan"/></span><small>1 · TOUCH</small><h3>Tap the wristband</h3><p>Begin the day with a physical ritual that refreshes your quests.</p></article><i/><article><span><Icon name="spark"/></span><small>2 · ACT</small><h3>Complete a quest</h3><p>Choose a realistic action, event or bite-sized learning challenge.</p></article><i/><article><span><Icon name="phone"/></span><small>3 · VERIFY</small><h3>Capture evidence</h3><p>In-app camera evidence is checked by AI and staff when needed.</p></article><i/><article><span><Icon name="leaf"/></span><small>4 · GROW</small><h3>See impact grow</h3><p>Earn leaves, style your mascot and build a verified impact record.</p></article></div></section>
 
     <Suspense fallback={<section id="mascots" className="showcase-mascots-loading"><span/><p>Preparing the novo family…</p></section>}><MascotCarousel3D /></Suspense>
 
-    <section className="showcase-events"><div className="showcase-section-copy"><p className="showcase-kicker">REAL-WORLD MOMENTUM</p><h2>Singapore is already moving.</h2><p>novo connects young adults with official activities that make sustainability social and local.</p></div><div className="showcase-event-list">{showcaseEvents.map((event) => <article key={event.title} className={event.tone}><time>{event.date}</time><div><small>{event.place}</small><h3>{event.title}</h3><p>{event.detail}</p></div><Icon name="arrow"/></article>)}</div><a className="showcase-source" href="https://www.nea.gov.sg/media/news/news/index/clean-and-green-singapore-2026--collective-ownership-for-a-liveable--climate-resilient-future" target="_blank" rel="noreferrer">Events sourced from the National Environment Agency <Icon name="arrow" size={15}/></a></section>
+    <section id="demo" className="showcase-demo-section"><div className="showcase-section-copy"><p className="showcase-kicker">TRY THE REAL APP</p><h2>See the loop for yourself.</h2><p>Enter the stripped-down React Native web experience with a prepared demo account. No credentials, no staged screenshots.</p></div><a className="showcase-demo-link-card" href="/demo"><span><Icon name="phone"/></span><div><small>LIVE DEMO</small><strong>Open novo</strong><p>Direct demo-account access</p></div><Icon name="arrow"/></a></section>
 
-    <section id="demo" className="showcase-demo-section"><div className="showcase-section-copy"><p className="showcase-kicker">TRY THE REAL APP</p><h2>Step into novo.</h2><p>Open the React Native Expo web app with a prepared demo member. You will be signed in automatically so you can explore the real Home, Tasks, Rewards, Friends and Profile experiences.</p><ul><li><Icon name="check"/>No credentials needed</li><li><Icon name="check"/>Real app interface</li><li><Icon name="check"/>Works on your phone</li></ul></div><a className="showcase-demo-link-card" href="/demo"><span><Icon name="phone"/></span><div><small>LIVE EXPO DEMO</small><strong>Open the novo app</strong><p>Direct demo-account access</p></div><Icon name="arrow"/></a></section>
-
-    <section id="showcase-sign-in" className="showcase-auth"><div className="showcase-auth-copy"><p className="showcase-kicker">ALREADY PART OF NOVO?</p><h2>Continue your journey.</h2><p>Members, event organizers, staff and administrators use the same secure account. Your role opens the right experience automatically.</p></div><AccessScreen embedded onAuthenticated={onAuthenticated}/></section>
     <footer className="showcase-footer"><Logo operations={false}/><p>Small habits · real change</p><span>Built in Singapore for a more circular future.</span></footer>
+    {loginOpen && <div className="showcase-login-layer" role="dialog" aria-modal="true" aria-label="Sign in to novo"><button className="showcase-login-scrim" onClick={() => setLoginOpen(false)} aria-label="Close sign in"/><div className="showcase-login-dialog"><button className="showcase-login-close" onClick={() => setLoginOpen(false)} aria-label="Close sign in"><Icon name="close"/></button><AccessScreen embedded onAuthenticated={(identity) => { setLoginOpen(false); onAuthenticated(identity); }}/></div></div>}
   </main>;
 }
 
@@ -714,7 +737,7 @@ function EventRow({ event, onClick }: { event: EventItem; onClick: () => void })
 function Events({ token, events, onEvents, onCreate, onCheckin, showToast }: { token: string; events: EventItem[]; onEvents: (events: EventItem[]) => void; onCreate: () => void; onCheckin: () => void; showToast: (message: string) => void }) {
   const [filter, setFilter] = useState('All events');
   const [dialog, setDialog] = useState<CrudDialogConfig | null>(null);
-  const edit = (event: EventItem) => setDialog({ eyebrow: 'EDIT EVENT', title: event.title, description: 'Update the public event details shown to members.', submitLabel: 'Save changes', fields: [{ key: 'title', label: 'Event name', value: event.title }, { key: 'place', label: 'Location', value: event.place }, { key: 'points', label: 'Leaves rewarded', value: String(event.points), type: 'number', min: 0, step: 10 }], onSubmit: async (values) => { const title = values.title.trim(); const place = values.place.trim(); const points = Math.max(0, Math.round(Number(values.points))); const response = await fetch(`/api/portal/events/${event.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ title, location: place, points }) }); const result = await response.json().catch(() => ({})); if (!response.ok) { showToast(result.message ?? 'Event could not be updated'); return false; } onEvents(events.map((item) => item.id === event.id ? { ...item, title, place, points } : item)); showToast('Event updated'); return true; } });
+  const edit = (event: EventItem) => setDialog({ eyebrow: 'EDIT EVENT', title: event.title, description: 'Update the public event details and decide whether unregistered guests can tap in.', submitLabel: 'Save changes', fields: [{ key: 'title', label: 'Event name', value: event.title }, { key: 'place', label: 'Location', value: event.place }, { key: 'points', label: 'Leaves rewarded', value: String(event.points), type: 'number', min: 0, step: 10 }, { key: 'allowWalkIns', label: 'Door policy', value: event.allowWalkIns === false ? 'false' : 'true', options: [{ value: 'true', label: 'Registered guests + walk-ins' }, { value: 'false', label: 'Registered guests only' }], hint: 'Paired wristbands still identify every attendee securely.' }], onSubmit: async (values) => { const title = values.title.trim(); const place = values.place.trim(); const points = Math.max(0, Math.round(Number(values.points))); const allowWalkIns = values.allowWalkIns === 'true'; const response = await fetch(`/api/portal/events/${event.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ title, location: place, points, allowWalkIns }) }); const result = await response.json().catch(() => ({})); if (!response.ok) { showToast(result.message ?? 'Event could not be updated'); return false; } onEvents(events.map((item) => item.id === event.id ? { ...item, title, place, points, allowWalkIns } : item)); showToast('Event updated'); return true; } });
   const remove = (event: EventItem) => setDialog({ eyebrow: 'DELETE EVENT', title: `Delete “${event.title}”?`, description: 'This permanently removes the event and cannot be undone.', submitLabel: 'Delete event', destructive: true, fields: [], onSubmit: async () => { const response = await fetch(`/api/portal/events/${event.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }); if (!response.ok) { showToast('Event could not be deleted'); return false; } onEvents(events.filter((item) => item.id !== event.id)); showToast('Event deleted'); return true; } });
   return <><div className="page-stack"><div className="action-row"><div className="segmented">{['All events', 'Upcoming', 'Drafts', 'Past'].map((item) => <button key={item} className={filter === item ? 'selected' : ''} onClick={() => setFilter(item)}>{item}</button>)}</div><button className="primary" onClick={onCreate}><Icon name="plus"/>Create event</button></div><section className="surface table-surface"><div className="table-toolbar"><label className="search"><Icon name="search" size={18}/><input placeholder="Search events" aria-label="Search events"/></label><button className="soft-button">Newest first</button></div><div className="event-cards">{events.filter((event) => filter === 'All events' || filter === 'Drafts' && event.status === 'Draft' || filter === 'Upcoming' && event.status === 'Open' || filter === 'Past' && event.status === 'Completed').map((event) => <article className="event-card" key={event.id}><div className="event-cover"><span>{event.date}</span><i className={event.status.toLowerCase()}>{event.status}</i></div><div className="event-card-body"><h3>{event.title}</h3><p><Icon name="pin" size={15}/>{event.place}</p><p><Icon name="clock" size={15}/>{event.time} · {event.duration}</p><div className="event-card-footer"><span><b>{event.attending}</b><small>{event.capacity ? ` of ${event.capacity} registered` : 'registered · unlimited'}</small></span><span><b>{event.points}</b><small>leaves</small></span></div><div className="card-actions triple"><button className="soft-button" onClick={() => edit(event)}>Edit</button><button className="danger-button" onClick={() => remove(event)}>Delete</button><button className="primary small" onClick={onCheckin}><Icon name="scan" size={17}/>Check in</button></div></div></article>)}</div></section></div>{dialog && <CrudDialog config={dialog} onClose={() => setDialog(null)}/>}</>;
 }
@@ -722,15 +745,72 @@ function Events({ token, events, onEvents, onCreate, onCheckin, showToast }: { t
 function CheckIn({ token, events, showToast }: { token: string; events: EventItem[]; showToast: (message: string) => void }) {
   const [running, setRunning] = useState(false);
   const [code, setCode] = useState('');
-  const [checked, setChecked] = useState<string[]>([]);
   const [selectedEventId, setSelectedEventId] = useState('');
+  const [attendance, setAttendance] = useState<AttendanceView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ tone: 'success' | 'duplicate' | 'error'; title: string; detail: string } | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+  const readerRef = useRef<unknown>(null);
   const eventItem = events.find((event) => event.id === selectedEventId) ?? events.find((event) => event.status !== 'Draft') ?? events[0];
+  const loadAttendance = async (eventId = eventItem?.id) => {
+    if (!eventId) return;
+    const response = await fetch(`/api/portal/events/${eventId}/attendance`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Attendance could not be refreshed.');
+    setAttendance(await response.json() as AttendanceView);
+  };
+  useEffect(() => { if (eventItem?.id) void loadAttendance(eventItem.id).catch(() => undefined); }, [eventItem?.id, token]);
+  useEffect(() => {
+    const capture = (event: Event) => { event.preventDefault(); setInstallPrompt(event as InstallPromptEvent); };
+    window.addEventListener('beforeinstallprompt', capture);
+    return () => window.removeEventListener('beforeinstallprompt', capture);
+  }, []);
   if (!eventItem) return <section className="surface empty-review"><Icon name="calendar" size={34}/><h2>No event ready for check-in</h2><p>Create an event first, then return here to scan attendees.</p></section>;
-  const checkInToken = async (value: string) => { const tagToken = value.trim().match(/novo:\/\/wristband\/([^/?#]+)/i)?.[1] ?? value.trim(); if (!tagToken) return; const response = await fetch(`/api/portal/events/${eventItem.id}/check-in`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ tagToken }) }); const result = await response.json(); if (!response.ok) return showToast(result.message ?? 'Could not verify wristband'); const label = result.attendee?.name ?? result.attendee?.id ?? 'Member'; setChecked((current) => [label, ...current]); setCode(''); showToast(`${label} verified · ${result.pointsAwarded} leaves awarded`); };
+  const checkInToken = async (value: string) => {
+    if (busy) return;
+    const tagToken = value.trim().match(/novo:\/\/wristband\/([^/?#]+)/i)?.[1] ?? value.trim();
+    if (!tagToken) return;
+    setBusy(true); setResult(null);
+    try {
+      const response = await fetch(`/api/portal/events/${eventItem.id}/check-in`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ tagToken }) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.message ?? 'Could not verify wristband');
+      const label = payload.attendee?.name ?? payload.attendee?.id ?? 'Member';
+      const duplicate = Boolean(payload.duplicate);
+      setResult({ tone: duplicate ? 'duplicate' : 'success', title: duplicate ? `${label} is already checked in` : `${label} is in`, detail: duplicate ? 'No duplicate points were issued.' : `${payload.pointsAwarded} leaves awarded${payload.walkIn ? ' · walk-in added' : ''}` });
+      setCode('');
+      if (!duplicate && navigator.vibrate) navigator.vibrate([50, 40, 80]);
+      await loadAttendance(eventItem.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not verify wristband';
+      setResult({ tone: 'error', title: 'Wristband not checked in', detail: message });
+      if (navigator.vibrate) navigator.vibrate(150);
+    } finally { setBusy(false); }
+  };
   const submit = async (event: FormEvent) => { event.preventDefault(); await checkInToken(code); };
-  const startReader = async () => { const NDEFReaderClass = (window as unknown as { NDEFReader?: new () => { scan: () => Promise<void>; onreading: ((event: { message: { records: Array<{ recordType: string; data?: DataView }> } }) => void) | null } }).NDEFReader; if (!NDEFReaderClass) { showToast('Web NFC requires Chrome on an NFC-capable Android device'); return; } try { const reader = new NDEFReaderClass(); await reader.scan(); reader.onreading = (event) => { const record = event.message.records.find((item) => item.recordType === 'url'); if (!record?.data) return; const value = new TextDecoder().decode(record.data); void checkInToken(value); }; setRunning(true); showToast('Wristband scanner is ready'); } catch { showToast('NFC permission was not granted'); } };
-  const total = eventItem.checkedIn + checked.length; const percentage = eventItem.capacity ? Math.min(100, Math.round(total / eventItem.capacity * 100)) : total > 0 ? 100 : 0;
-  return <div className="checkin-layout"><section className="scanner-card"><div className="scanner-head"><div><p className="eyebrow">WRISTBAND ATTENDANCE</p><h2>{eventItem.title}</h2><p><Icon name="pin" size={15}/>{eventItem.place} · {eventItem.date}, {eventItem.time}</p><label className="field"><span>Event to verify</span><select value={eventItem.id} onChange={(event) => { setSelectedEventId(event.target.value); setChecked([]); setRunning(false); }}>{events.filter((item) => item.status !== 'Draft').map((item) => <option key={item.id} value={item.id}>{item.title} · {item.date}</option>)}</select></label></div><span className="live-badge"><i/>NFC</span></div><div className={running ? 'camera running' : 'camera'}><div className="scan-frame"><i/><i/><i/><i/></div>{running ? <><span className="scan-line"/><p>Hold the completed attendee’s Novo wristband near this phone</p></> : <div className="camera-empty"><span><Icon name="scan" size={34}/></span><b>Ready for NFC</b><p>After the event is completed, tap each attendee’s paired wristband to verify attendance and award leaves.</p><button className="primary" onClick={() => void startReader()}>Start wristband scanner</button></div>}</div><form className="manual-code" onSubmit={submit}><span>Development fallback: enter wristband token</span><div><input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Wristband token" aria-label="Wristband token"/><button className="soft-button" type="submit">Verify</button></div></form></section><aside className="attendance-panel surface"><div className="attendance-total"><span><Icon name="people"/></span><div><b>{total}</b><small>{eventItem.capacity ? `of ${eventItem.capacity} verified` : 'verified'}</small></div><strong>{percentage}%</strong></div><div className="attendance-progress"><span style={{ width: `${percentage}%` }}/></div><div className="section-heading compact"><div><p className="eyebrow">JUST VERIFIED</p><h3>Recent wristband taps</h3></div></div><div className="people-list">{checked.map((memberId, index) => <div key={`${memberId}-${index}`}><span className={`avatar tone-${index % 3}`}>{memberId[0]}</span><span><b>{memberId}</b><small>{index === 0 ? 'Just now' : `${index + 1} min ago`} · +{eventItem.points} leaves awarded</small></span><i><Icon name="check" size={15}/></i></div>)}</div></aside></div>;
+  const startReader = async () => {
+    const NDEFReaderClass = (window as unknown as { NDEFReader?: new () => { scan: () => Promise<void>; onreading: ((event: { message: { records: Array<{ recordType: string; data?: DataView }> } }) => void) | null; onreadingerror: (() => void) | null } }).NDEFReader;
+    if (!NDEFReaderClass) { showToast('Use Chrome on an NFC-capable Android phone. iPhone browsers do not expose Web NFC.'); return; }
+    try {
+      const reader = new NDEFReaderClass();
+      await reader.scan();
+      reader.onreading = (scanEvent) => {
+        const record = scanEvent.message.records.find((item) => item.recordType === 'url') ?? scanEvent.message.records.find((item) => item.recordType === 'text');
+        if (!record?.data) return;
+        void checkInToken(new TextDecoder().decode(record.data));
+      };
+      reader.onreadingerror = () => setResult({ tone: 'error', title: 'Try that tap again', detail: 'Keep the wristband still against the back of this phone.' });
+      readerRef.current = reader;
+      setRunning(true);
+      setResult({ tone: 'success', title: 'Scanner ready', detail: 'Keep this page open and tap each wristband once.' });
+    } catch { setResult({ tone: 'error', title: 'NFC is not available yet', detail: 'Allow NFC when Chrome asks, then start the scanner again.' }); }
+  };
+  const install = async () => { if (!installPrompt) return; await installPrompt.prompt(); const choice = await installPrompt.userChoice; if (choice.outcome === 'accepted') setInstallPrompt(null); };
+  const total = attendance?.event.checkedIn ?? eventItem.checkedIn;
+  const registered = attendance?.event.registered ?? eventItem.attending;
+  const capacity = attendance?.event.capacity ?? eventItem.capacity;
+  const percentage = capacity ? Math.min(100, Math.round(total / capacity * 100)) : registered > 0 ? Math.round(total / registered * 100) : total > 0 ? 100 : 0;
+  const attendeeRows = attendance?.attendees ?? [];
+  return <div className="checkin-layout"><section className="scanner-card"><div className="scanner-head"><div><p className="eyebrow">FAST NFC ENTRY</p><h2>{eventItem.title}</h2><p><Icon name="pin" size={15}/>{eventItem.place} · {eventItem.date}, {eventItem.time}</p><label className="field"><span>Event to verify</span><select value={eventItem.id} onChange={(event) => { setSelectedEventId(event.target.value); setAttendance(null); setResult(null); }}>{events.filter((item) => item.status !== 'Draft').map((item) => <option key={item.id} value={item.id}>{item.title} · {item.date}</option>)}</select></label></div><div className="scanner-statuses"><span className="live-badge"><i/>NFC</span>{installPrompt && <button className="install-scanner" onClick={() => void install()}><Icon name="phone" size={15}/>Install scanner</button>}</div></div><div className={running ? 'camera running' : 'camera'}><div className="scan-frame"><i/><i/><i/><i/></div>{running ? <><span className="scan-line"/><div className="scanner-ready"><span><Icon name={busy ? 'clock' : 'scan'} size={34}/></span><b>{busy ? 'Checking wristband…' : 'Ready for the next person'}</b><p>Hold the attendee’s wristband near the back of this phone. The scanner stays ready between taps.</p></div></> : <div className="camera-empty"><span><Icon name="scan" size={34}/></span><b>One tap. One verified attendee.</b><p>Start once, then move through the queue without names, tickets or QR screens. Registered guests and permitted walk-ins are handled automatically.</p><button className="primary" onClick={() => void startReader()}>Start continuous scanner</button></div>}</div>{result && <div className={`scan-result ${result.tone}`} role="status"><span><Icon name={result.tone === 'error' ? 'close' : result.tone === 'duplicate' ? 'clock' : 'check'}/></span><div><b>{result.title}</b><small>{result.detail}</small></div></div>}<form className="manual-code" onSubmit={submit}><span>Secure fallback · enter the wristband token</span><div><input value={code} onChange={(event) => setCode(event.target.value)} placeholder="Wristband token" aria-label="Wristband token"/><button className="soft-button" type="submit" disabled={busy || !code.trim()}>Verify</button></div></form></section><aside className="attendance-panel surface"><div className="attendance-total"><span><Icon name="people"/></span><div><b>{total}</b><small>{capacity ? `of ${capacity} checked in` : `${registered} registered`}</small></div><strong>{percentage}%</strong></div><div className="attendance-progress"><span style={{ width: `${percentage}%` }}/></div><div className="attendance-summary"><span>{registered} expected</span><span>{Math.max(0, registered - total)} waiting</span><span>{attendeeRows.filter((person) => person.walkIn).length} walk-ins</span></div><div className="section-heading compact"><div><p className="eyebrow">LIVE DOOR LIST</p><h3>Attendance</h3></div><button className="icon-button" onClick={() => void loadAttendance()} aria-label="Refresh attendance"><Icon name="clock" size={17}/></button></div><div className="people-list attendance-roster">{attendeeRows.map((person, index) => <div key={person.id} className={person.checkedIn ? 'verified' : ''}><span className={`avatar tone-${index % 3}`}>{person.name[0]}</span><span><b>{person.name}</b><small>{person.checkedIn ? `${person.walkIn ? 'Walk-in · ' : ''}${new Date(person.checkedInAt ?? '').toLocaleTimeString('en-SG', { hour: 'numeric', minute: '2-digit' })} · +${person.pointsAwarded} leaves` : `${person.mascotName ?? 'novo member'} · waiting`}</small></span><i>{person.checkedIn ? <Icon name="check" size={15}/> : '·'}</i></div>)}{!attendeeRows.length && <div className="attendance-empty"><Icon name="people"/><span><b>No one on the door list yet</b><small>Allowed walk-ins will appear after their first tap.</small></span></div>}</div></aside></div>;
 }
 
 function Reviews({ token, showToast }: { token: string; showToast: (message: string) => void }) {
@@ -985,13 +1065,13 @@ function CreateEvent({ token, organizerId, onClose, onCreate }: { token: string;
     if ((latitude && !longitude) || (!latitude && longitude)) return setError('Enter both latitude and longitude, or leave both blank.');
     setBusy(true); setError('');
     try {
-      const body = { organizerId, title: title.trim(), location: place.trim(), startsAt: new Date(`${date}T${time}:00+08:00`).toISOString(), durationMinutes, capacity: unlimited ? null : capacity, points, status, ...(latitude && longitude ? { latitude: Number(latitude), longitude: Number(longitude) } : {}) };
+      const body = { organizerId, title: title.trim(), location: place.trim(), startsAt: new Date(`${date}T${time}:00+08:00`).toISOString(), durationMinutes, capacity: unlimited ? null : capacity, points, allowWalkIns: true, status, ...(latitude && longitude ? { latitude: Number(latitude), longitude: Number(longitude) } : {}) };
       const response = await fetch('/api/portal/events', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       const result = await response.json().catch(() => ({}));
       if (!response.ok) return setError(result.message ?? 'Event could not be saved.');
       const created = result.event as { id: string; startsAt: string; latitude: number | null; longitude: number | null };
       const starts = new Date(created.startsAt);
-      onCreate({ id: created.id, title: title.trim(), place: place.trim(), date: starts.toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }), time, duration, capacity: unlimited ? null : capacity, attending: 0, checkedIn: 0, points, status: status === 'open' ? 'Open' : 'Draft', latitude: created.latitude, longitude: created.longitude });
+      onCreate({ id: created.id, title: title.trim(), place: place.trim(), date: starts.toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }), time, duration, capacity: unlimited ? null : capacity, attending: 0, checkedIn: 0, allowWalkIns: true, points, status: status === 'open' ? 'Open' : 'Draft', latitude: created.latitude, longitude: created.longitude });
     } finally { setBusy(false); }
   };
   const submit = (event: FormEvent) => { event.preventDefault(); void save('open'); };
