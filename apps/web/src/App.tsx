@@ -175,7 +175,7 @@ function Icon({ name, size = 20 }: { name: IconName; size?: number }) {
 }
 
 function Logo({ operations = true }: { operations?: boolean }) {
-  return <div className="logo" aria-label="novo"><span className="logo-mark"><span /></span><strong>novo</strong>{operations && <em>operations</em>}</div>;
+  return <div className="logo" aria-label="novo"><img className="logo-mark" src="/novo-icon.png" alt="" /><strong>novo</strong>{operations && <em>operations</em>}</div>;
 }
 
 function CrudDialog({ config, onClose }: { config: CrudDialogConfig; onClose: () => void }) {

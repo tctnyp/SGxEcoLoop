@@ -28,7 +28,7 @@ export const PlushieScene = memo(function PlushieScene({ mascotType, accessories
 });
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, width: '100%', pointerEvents: 'none', overflow: 'visible' },
-  scaledCanvas: { position: 'absolute', width: '72%', height: '72%', left: '14%', top: '14%', transform: [{ scale: 1.38 }] },
-  compactCanvas: { width: '62%', height: '62%', left: '19%', top: '19%', transform: [{ scale: 1.16 }] },
+  wrap: { flex: 1, width: '100%', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', overflow: 'visible' },
+  scaledCanvas: { width: '100%', height: '100%' },
+  compactCanvas: { width: '100%', height: '100%' },
 });

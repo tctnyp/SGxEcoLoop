@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import * as WebBrowser from 'expo-web-browser';
@@ -32,6 +31,7 @@ import {
   warmAppCache,
 } from './src/api';
 import { AppErrorBoundary } from './src/components/AppErrorBoundary';
+import { Logo } from './src/components/Logo';
 import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
@@ -49,9 +49,10 @@ const isShowcaseDemo = () => Platform.OS === 'web'
   && typeof window !== 'undefined'
   && /^\/demo\/?$/.test(window.location.pathname);
 
-function StartupScreen({ introComplete, message, onIntroComplete }: { introComplete: boolean; message: string; onIntroComplete: () => void }) {
+function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitComplete }: { introComplete: boolean; message: string; ready: boolean; onIntroComplete: () => void; onExitComplete: () => void }) {
   const fall = useRef(new Animated.Value(0)).current;
   const brand = useRef(new Animated.Value(0)).current;
+  const exit = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const animation = Animated.parallel([
@@ -65,18 +66,26 @@ function StartupScreen({ introComplete, message, onIntroComplete }: { introCompl
     return () => animation.stop();
   }, [brand, fall, onIntroComplete]);
 
-  const leafRotation = fall.interpolate({ inputRange: [0, 0.28, 0.56, 0.8, 1], outputRange: ['-38deg', '24deg', '-18deg', '12deg', '0deg'] });
-  const leafX = fall.interpolate({ inputRange: [0, 0.22, 0.48, 0.72, 1], outputRange: [-34, 28, -20, 12, 0] });
-  const leafY = fall.interpolate({ inputRange: [0, 1], outputRange: [-310, -33] });
+  useEffect(() => {
+    if (!ready) return undefined;
+    const animation = Animated.timing(exit, { toValue: 1, duration: 460, easing: Easing.inOut(Easing.cubic), useNativeDriver: true });
+    const timeout = setTimeout(() => animation.start(({ finished }) => { if (finished) onExitComplete(); }), 90);
+    return () => { clearTimeout(timeout); animation.stop(); };
+  }, [exit, onExitComplete, ready]);
 
-  return <View style={styles.startupScreen} accessibilityLabel={introComplete ? message : 'novo is starting'}>
+  const leafRotation = fall.interpolate({ inputRange: [0, 0.16, 0.34, 0.52, 0.7, 0.86, 1], outputRange: ['-64deg', '34deg', '-29deg', '25deg', '-17deg', '9deg', '0deg'] });
+  const leafX = fall.interpolate({ inputRange: [0, 0.16, 0.34, 0.52, 0.7, 0.86, 1], outputRange: [-40, 33, -27, 22, -14, 7, 0] });
+  const leafY = fall.interpolate({ inputRange: [0, 0.88, 0.95, 1], outputRange: [-330, 58, 47, 52] });
+  const leafScale = fall.interpolate({ inputRange: [0, 0.4, 0.82, 1], outputRange: [0.82, 1.08, 0.94, 1] });
+
+  return <Animated.View style={[styles.startupScreen, { opacity: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }), transform: [{ scale: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]} accessibilityLabel={introComplete ? message : 'novo is starting'}>
     <StatusBar style="light" />
     <View style={styles.startupStage}>
-      <Animated.View style={[styles.startupLeaf, { transform: [{ translateX: leafX }, { translateY: leafY }, { rotate: leafRotation }] }]}><Ionicons name="leaf" size={46} color="#DFFC76" /></Animated.View>
-      <Animated.View style={[styles.startupBrand, { opacity: brand, transform: [{ scale: brand.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) }] }]}><View style={styles.startupLogoMark}><Ionicons name="leaf" size={27} color="#17352A" /></View><Text style={styles.startupWordmark}>novo</Text></Animated.View>
+      <Animated.View style={[styles.startupLeaf, { transform: [{ translateX: leafX }, { translateY: leafY }, { rotate: leafRotation }, { scale: leafScale }] }]}><View style={styles.startupLeafShape} /></Animated.View>
+      <Animated.View style={[styles.startupBrand, { opacity: brand, transform: [{ scale: brand.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) }] }]}><Logo inverse /></Animated.View>
     </View>
     {introComplete ? <View style={styles.startupLoader} accessibilityLiveRegion="polite"><ActivityIndicator size="small" color="#DFFC76" /><Text style={styles.startupMessage}>{message}</Text><Text style={styles.startupHint}>Preparing your map, quests and rewards</Text></View> : <View style={styles.startupLoaderPlaceholder} />}
-  </View>;
+  </Animated.View>;
 }
 
 function NovoApp() {
@@ -90,7 +99,9 @@ function NovoApp() {
   const [showHomeGuide, setShowHomeGuide] = useState(false);
   const [introComplete, setIntroComplete] = useState(false);
   const [loaderDwellComplete, setLoaderDwellComplete] = useState(false);
+  const [startupVisible, setStartupVisible] = useState(true);
   const [bootMessage, setBootMessage] = useState('Connecting to novo…');
+  const contentOpacity = useRef(new Animated.Value(0)).current;
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
   const screenRef = useRef<Screen>('signin');
@@ -100,6 +111,12 @@ function NovoApp() {
     const timeout = setTimeout(() => setLoaderDwellComplete(true), 420);
     return () => clearTimeout(timeout);
   }, []);
+
+  const appReady = Boolean(fontsLoaded && !booting && introComplete && loaderDwellComplete);
+  useEffect(() => {
+    if (!appReady) return;
+    Animated.timing(contentOpacity, { toValue: 1, duration: 360, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [appReady, contentOpacity]);
 
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
@@ -473,20 +490,19 @@ function NovoApp() {
     }
   };
 
-  if (!fontsLoaded || booting || !introComplete || !loaderDwellComplete) {
-    return <StartupScreen introComplete={introComplete} message={bootMessage} onIntroComplete={handleIntroComplete} />;
-  }
-
   return (
     <SafeAreaProvider>
-      <StatusBar style="dark" />
-      {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
-      {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => { setDraft(undefined); setScreen('onboarding'); }} />}
-      {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
-      {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
-      {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
-      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} showHomeGuide={showHomeGuide} onHomeGuideComplete={handleHomeGuideComplete} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
-      {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}
+      <Animated.View pointerEvents={appReady ? 'auto' : 'none'} accessibilityElementsHidden={!appReady} importantForAccessibility={appReady ? 'auto' : 'no-hide-descendants'} style={[styles.appContent, { opacity: contentOpacity }]}>
+        <StatusBar style="dark" />
+        {accountStatus === 'limited' && screen !== 'signin' && screen !== 'onboarding' && <SafeAreaView edges={['top']} style={styles.limitedBanner}><Text style={styles.limitedTitle}>Limited account</Text><Text style={styles.limitedCopy}>Viewing is available. Changes that affect leaves, tasks, friends, purchases or wristbands are disabled.</Text></SafeAreaView>}
+        {screen === 'signin' && <SignInScreen onAuthenticated={handleAuth} onSignUp={() => { setDraft(undefined); setScreen('onboarding'); }} />}
+        {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
+        {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
+        {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
+        {screen === 'home' && user && <HomeScreen demoMode={isShowcaseDemo()} user={user} token={requireToken()} showHomeGuide={showHomeGuide} onHomeGuideComplete={handleHomeGuideComplete} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
+        {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}
+      </Animated.View>
+      {startupVisible && <StartupScreen introComplete={introComplete} message={bootMessage} ready={appReady} onIntroComplete={handleIntroComplete} onExitComplete={() => setStartupVisible(false)} />}
     </SafeAreaProvider>
   );
 }
@@ -501,12 +517,12 @@ export default function App() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
-  startupScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
+  appContent: { flex: 1 },
+  startupScreen: { ...StyleSheet.absoluteFillObject, zIndex: 1000, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
   startupStage: { width: 240, height: 150, alignItems: 'center', justifyContent: 'flex-end' },
   startupLeaf: { position: 'absolute', top: 38, zIndex: 3 },
+  startupLeafShape: { width: 32, height: 46, borderTopLeftRadius: 30, borderBottomRightRadius: 30, backgroundColor: '#DFFC76', transform: [{ rotate: '18deg' }], shadowColor: '#DFFC76', shadowOpacity: 0.24, shadowRadius: 12 },
   startupBrand: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  startupLogoMark: { width: 51, height: 51, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DFFC76', transform: [{ rotate: '-5deg' }] },
-  startupWordmark: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 43, lineHeight: 48, fontWeight: '800', letterSpacing: -2 },
   startupLoader: { position: 'absolute', bottom: '19%', minHeight: 72, alignItems: 'center', justifyContent: 'center', gap: 7 },
   startupLoaderPlaceholder: { position: 'absolute', bottom: '19%', height: 72 },
   startupMessage: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 14, fontWeight: '700' },
