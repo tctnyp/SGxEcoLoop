@@ -733,6 +733,15 @@ function TasksPage({ token, palette, onUserUpdated }: { token: string; palette: 
     if (locating) return;
     setLocating(true);
     try {
+      if (Platform.OS === 'web') {
+        if (!navigator.geolocation) throw new Error('Location is not available in this browser.');
+        const result = await new Promise<GeolocationPosition>((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 12_000, maximumAge: 15_000 });
+        });
+        setUserLocation({ latitude: result.coords.latitude, longitude: result.coords.longitude });
+        setFocusUser((current) => current + 1);
+        return;
+      }
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) throw new Error('Enable location access to see yourself and nearby activities on the map.');
       const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
@@ -744,6 +753,22 @@ function TasksPage({ token, palette, onUserUpdated }: { token: string; palette: 
   };
   useEffect(() => {
     let active = true;
+
+    if (Platform.OS === 'web') {
+      if (!navigator.geolocation) return () => { active = false; };
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          if (active) setUserLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+        },
+        () => undefined,
+        { enableHighAccuracy: false, timeout: 15_000, maximumAge: 30_000 },
+      );
+      return () => {
+        active = false;
+        navigator.geolocation.clearWatch(watchId);
+      };
+    }
+
     let subscription: Location.LocationSubscription | undefined;
     void Location.requestForegroundPermissionsAsync().then(async (permission) => {
       if (!active || !permission.granted) return;
@@ -751,7 +776,10 @@ function TasksPage({ token, palette, onUserUpdated }: { token: string; palette: 
         if (active) setUserLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
       });
     }).catch(() => undefined);
-    return () => { active = false; subscription?.remove(); };
+    return () => {
+      active = false;
+      subscription?.remove();
+    };
   }, []);
 
   const openTask = (quest: User['dailyQuests'][number] | null) => {

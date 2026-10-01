@@ -138,24 +138,25 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
               <Logo inverse compact={!wide} />
               <View style={styles.pill}><Text style={styles.pillText}>small habits · real change</Text></View>
             </View>
-            <View style={[styles.heroCopy, short && styles.heroCopyShort, constrained && styles.heroCopyKeyboard]}>
+            {(!keyboardVisible || wide) && <View style={[styles.heroCopy, short && styles.heroCopyShort]}>
               <Text style={[styles.eyebrow, short && styles.eyebrowShort]}>MEET YOUR PLANET PAL</Text>
-              <Text accessibilityRole="header" style={[styles.heroTitle, short && styles.heroTitleShort, constrained && styles.heroTitleKeyboard]}>Less waste.{`\n`}More <Text style={[styles.heroAccent, short && styles.heroAccentShort, constrained && styles.heroTitleKeyboard]}>wonder.</Text></Text>
-              <Text style={[styles.heroBody, short && styles.heroBodyShort, constrained && styles.heroBodyKeyboard]}>Grow better habits with a wristband that brings your in-app animal mascot to life.</Text>
-            </View>
+              <Text accessibilityRole="header" style={[styles.heroTitle, short && styles.heroTitleShort]}>Less waste.{`\n`}More <Text style={[styles.heroAccent, short && styles.heroAccentShort]}>wonder.</Text></Text>
+              <Text style={[styles.heroBody, short && styles.heroBodyShort]}>Grow better habits with a wristband that brings your in-app animal mascot to life.</Text>
+            </View>}
             <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.heroDecorOne} />
             <View accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.heroDecorTwo} />
-            <Text style={[styles.heroFooter, wide && styles.heroFooterWide, short && styles.heroFooterShort]}>novo means “renew” — and every day is a fresh start.</Text>
+            {(!keyboardVisible || wide) && <Text style={[styles.heroFooter, wide && styles.heroFooterWide, short && styles.heroFooterShort]}>novo means “renew” — and every day is a fresh start.</Text>}
           </View>
 
           <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard, tinyViewport && !keyboardVisible && styles.panelCompactTiny]}>
-            <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
-              <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
-              <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
-            </View>
+            <View style={[styles.panelContent, constrained && styles.panelContentKeyboard]}>
+              <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
+                <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
+                <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
+              </View>
 
-            <View style={styles.form}>
-              {recovering ? <><TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); setNotice(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handlePasswordReset()}/>{notice ? <View accessibilityLiveRegion="polite" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}<Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); setNotice(''); }}/></> : step === 'email' ? <>
+              <View style={styles.form}>
+                {recovering ? <><TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); setNotice(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handlePasswordReset()}/>{notice ? <View accessibilityLiveRegion="polite" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}<Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); setNotice(''); }}/></> : step === 'email' ? <>
                 <><View style={[styles.socialButtons, constrained && styles.socialButtonsKeyboard]}>
                   {providers.google && <View style={styles.socialButton}><Button compact label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={loading !== null}/></View>}
                   {providers.discord && <View style={styles.socialButton}><Button compact label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'} disabled={loading !== null}/></View>}
@@ -175,9 +176,10 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
                 <TextField label="Password" value={password} onChangeText={(value) => { setPassword(value); setError(''); }} secure placeholder="At least 6 characters" icon="lock-closed-outline" error={error || undefined} returnKeyType="done" onSubmitEditing={() => void handleSignIn()} />
                 <Pressable onPress={() => { setRecovering(true); setError(''); }}><Text style={styles.forgot}>Forgot password?</Text></Pressable>
                 <Button label="Sign in" onPress={handleSignIn} loading={loading === 'password'} />
-              </>}
+                </>}
+              </View>
+              {(!keyboardVisible || wide) && <Text style={[styles.terms, wide ? styles.termsWide : styles.termsCompact]}>By continuing, you agree to our Terms and Privacy Policy.</Text>}
             </View>
-            {(!keyboardVisible || wide) && <Text style={[styles.terms, wide ? styles.termsWide : styles.termsCompact]}>By continuing, you agree to our Terms and Privacy Policy.</Text>}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -194,7 +196,7 @@ const styles = StyleSheet.create({
   hero: { width: '100%', maxWidth: 520, backgroundColor: colors.forestDark, padding: 26, overflow: 'hidden' },
   heroCompact: { maxWidth: 560, height: '34%', minHeight: 218, paddingHorizontal: 22, paddingTop: 16, paddingBottom: 22 },
   heroCompactShort: { height: '30%', minHeight: 188, paddingTop: 12, paddingBottom: 16 },
-  heroCompactKeyboard: { height: '25%', minHeight: 136, paddingTop: 9, paddingBottom: 8 },
+  heroCompactKeyboard: { height: 104, minHeight: 104, paddingTop: 10, paddingBottom: 10 },
   heroCompactTiny: { height: '28%', minHeight: 150 },
   heroWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopLeftRadius: 32, borderBottomLeftRadius: 32, padding: 42 },
   heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -219,16 +221,18 @@ const styles = StyleSheet.create({
   heroFooterWide: { position: 'relative', left: 0, bottom: 0, width: '100%', textAlign: 'center', fontSize: 12, lineHeight: 17 },
   heroFooterShort: { display: 'none' },
   panel: { position: 'relative', width: '100%', maxWidth: 520, backgroundColor: colors.cream },
-  panelCompact: { flex: 1, maxWidth: 560, marginTop: -16, paddingHorizontal: 24, paddingTop: 22, paddingBottom: 14, borderTopLeftRadius: 32, borderTopRightRadius: 32, zIndex: 3 },
-  panelCompactShort: { paddingTop: 14, paddingBottom: 12 },
-  panelCompactKeyboard: { paddingTop: 12, paddingBottom: 12 },
-  panelCompactTiny: { paddingTop: 10, paddingBottom: 38 },
+  panelCompact: { flex: 1, maxWidth: 560, marginTop: -16, paddingHorizontal: 24, paddingVertical: 18, borderTopLeftRadius: 32, borderTopRightRadius: 32, zIndex: 3, justifyContent: 'center' },
+  panelCompactShort: { paddingVertical: 12 },
+  panelCompactKeyboard: { paddingTop: 16, paddingBottom: 10, justifyContent: 'flex-start' },
+  panelCompactTiny: { paddingVertical: 10 },
   panelWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopRightRadius: 32, borderBottomRightRadius: 32, paddingHorizontal: 70, justifyContent: 'center', shadowColor: colors.shadow, shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.08, shadowRadius: 30, elevation: 4 },
-  formHeader: { marginBottom: 22 },
-  formHeaderKeyboard: { marginBottom: 12 },
+  panelContent: { width: '100%' },
+  panelContentKeyboard: { flexShrink: 1 },
+  formHeader: { marginBottom: 16 },
+  formHeaderKeyboard: { marginBottom: 10 },
   title: { color: colors.ink, fontSize: 29, lineHeight: 34, fontWeight: '900', letterSpacing: -1.2 },
   subtitle: { color: colors.inkMuted, fontSize: 14, lineHeight: 20, marginTop: 3 },
-  form: { gap: 10 },
+  form: { gap: 12 },
   socialButtons: { width: '100%', flexDirection: 'row', gap: 6 },
   socialButton: { flex: 1, minWidth: 0 },
   socialButtonsKeyboard: { maxHeight: 46, overflow: 'hidden', gap: 5 },
@@ -248,6 +252,6 @@ const styles = StyleSheet.create({
   notice: { minHeight: 44, borderRadius: 15, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#E5F4D3', justifyContent: 'center' },
   noticeText: { color: colors.forest, fontSize: 13, lineHeight: 18, fontWeight: '700' },
   terms: { color: colors.inkMuted, fontSize: 11, lineHeight: 15, textAlign: 'center' },
-  termsCompact: { marginTop: 'auto', paddingTop: 8 },
+  termsCompact: { marginTop: 14 },
   termsWide: { marginTop: 18 },
 });

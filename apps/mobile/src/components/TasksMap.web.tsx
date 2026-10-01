@@ -1,5 +1,7 @@
 import './TasksMap.web.css';
 import { memo, useEffect, useRef } from 'react';
+import maplibregl from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { NovoEvent, NovoLocation } from '../types';
 
 type MapFeature = { geometry: { coordinates: [number, number] }; properties: Record<string, string | number> };
@@ -26,33 +28,7 @@ type MapLibreApi = {
   Popup: new (options: { offset: number }) => PopupInstance;
 };
 
-declare global { interface Window { maplibregl?: MapLibreApi } }
-
-let mapLibreLoader: Promise<MapLibreApi> | null = null;
-function loadMapLibre() {
-  if (window.maplibregl) return Promise.resolve(window.maplibregl);
-  if (mapLibreLoader) return mapLibreLoader;
-  mapLibreLoader = new Promise<MapLibreApi>((resolve, reject) => {
-    if (!document.querySelector('link[data-novo-maplibre]')) {
-      const stylesheet = document.createElement('link');
-      stylesheet.rel = 'stylesheet';
-      stylesheet.href = 'https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css';
-      stylesheet.dataset.novoMaplibre = 'true';
-      document.head.appendChild(stylesheet);
-    }
-    const existing = document.querySelector<HTMLScriptElement>('script[data-novo-maplibre]');
-    const script = existing ?? document.createElement('script');
-    if (!existing) {
-      script.src = 'https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js';
-      script.dataset.novoMaplibre = 'true';
-      document.head.appendChild(script);
-    }
-    const finish = () => window.maplibregl ? resolve(window.maplibregl) : reject(new Error('MapLibre did not initialize.'));
-    if (window.maplibregl) finish();
-    else { script.addEventListener('load', finish, { once: true }); script.addEventListener('error', () => reject(new Error('MapLibre could not load.')), { once: true }); }
-  });
-  return mapLibreLoader;
-}
+const mapLibre = maplibregl as unknown as MapLibreApi;
 
 function popupContent(title: string, detail: string, meta: string) {
   const content = document.createElement('div');
@@ -101,7 +77,7 @@ export const TasksMap = memo(function TasksMap({ locations, events, userLocation
   useEffect(() => {
     let disposed = false;
     let map: MapInstance | null = null;
-    loadMapLibre().then((maplibregl) => {
+    Promise.resolve(mapLibre).then((maplibregl) => {
       if (disposed || !containerRef.current) return;
       const initialLocation = latestLocationRef.current;
       map = new maplibregl.Map({ container: containerRef.current, style: 'https://tiles.openfreemap.org/styles/positron', center: initialLocation ? [initialLocation.longitude, initialLocation.latitude] : [103.8198, 1.3521], zoom: initialLocation ? 13.6 : 10.45, attributionControl: false });
