@@ -240,11 +240,33 @@ function communityImpact() {
   return Object.fromEntries(Object.entries(totals).map(([key, value]) => [key, rounded(value)])) as unknown as ImpactTotals;
 }
 
+const ACTIVITY_TOUCH_INTERVAL_MS = 60_000;
+const ACTIVITY_PERSIST_DELAY_MS = 15_000;
+let activityPersistTimer: NodeJS.Timeout | null = null;
+
+function scheduleActivityPersistence() {
+  if (activityPersistTimer) return;
+  activityPersistTimer = setTimeout(() => {
+    activityPersistTimer = null;
+    void persistDatabase(persistedCollections).catch((error) => console.error('Could not persist member activity.', error));
+  }, ACTIVITY_PERSIST_DELAY_MS);
+  activityPersistTimer.unref();
+}
+
 function recordActivity(user: User) {
   const now = new Date().toISOString();
   const today = singaporeDate(now);
-  user.lastActiveAt = now;
-  if (!user.activityDates.includes(today)) user.activityDates.push(today);
+  const lastTouch = Date.parse(user.lastActiveAt);
+  let changed = false;
+  if (!Number.isFinite(lastTouch) || Date.now() - lastTouch >= ACTIVITY_TOUCH_INTERVAL_MS) {
+    user.lastActiveAt = now;
+    changed = true;
+  }
+  if (!user.activityDates.includes(today)) {
+    user.activityDates.push(today);
+    changed = true;
+  }
+  if (changed) scheduleActivityPersistence();
 }
 
 function pilotMetrics() {
@@ -1193,6 +1215,13 @@ export const app = express();
 app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(',') ?? true }));
 app.use(express.json({ limit: '10mb' }));
+app.use((request, response, next) => {
+  if (request.method !== 'GET') return next();
+  if (request.path === '/api/auth/providers') response.setHeader('Cache-Control', 'public, max-age=600, stale-while-revalidate=3600');
+  else if (request.path === '/api/locations') response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=1800');
+  else if (request.path.startsWith('/api/member/')) response.setHeader('Cache-Control', 'private, no-cache');
+  next();
+});
 app.use(async (_request, _response, next) => {
   try {
     await databaseReady;
@@ -1217,8 +1246,7 @@ app.use((request, response, next) => {
   next();
 });
 app.use((request, response, next) => {
-  const recordsMemberActivity = request.method === 'GET' && request.path.startsWith('/api/member/');
-  if (request.method === 'POST' || request.method === 'PATCH' || request.method === 'DELETE' || recordsMemberActivity) {
+  if (request.method === 'POST' || request.method === 'PATCH' || request.method === 'DELETE') {
     response.on('finish', () => {
       if (response.statusCode < 400) void persistDatabase(persistedCollections).catch((error) => console.error('Could not persist novo state.', error));
     });

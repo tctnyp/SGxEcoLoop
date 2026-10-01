@@ -60,7 +60,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const lesson = lessons[step] ?? lessons[0]!;
-  const progress = useMemo<DimensionValue>(() => `${66.666 + ((step + 1) / lessons.length) * 33.334}%`, [step]);
+  const progress = useMemo<DimensionValue>(() => `${((step + 1) / lessons.length) * 100}%`, [step]);
 
   const finish = async (name: string) => {
     setLoading(true);
@@ -92,7 +92,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <View style={styles.topbar}>
         {step > 0 ? <Pressable onPress={() => setStep((current) => current - 1)} accessibilityRole="button" accessibilityLabel="Previous tutorial step" style={styles.roundButton}><Ionicons name="arrow-back" size={21} color={colors.ink} /></Pressable> : <Logo compact />}
-        <Text style={styles.step}>{step === 0 ? 'MASCOT · 3 OF 3' : `GUIDE ${step + 1} OF ${lessons.length}`}</Text>
+        <Text style={styles.step}>NOVO GUIDE · {step + 1} OF {lessons.length}</Text>
         {step > 0 && step < lessons.length - 1
           ? <Pressable onPress={() => void skip()} disabled={loading} accessibilityRole="button" accessibilityLabel="Skip the remaining guide" style={({ pressed }) => [styles.skip, pressed && styles.skipPressed, loading && styles.skipDisabled]}><Text style={styles.skipText}>Skip guide</Text></Pressable>
           : <View style={styles.topbarEndSpacer} />}
@@ -114,7 +114,7 @@ export function TutorialScreen({ user, onComplete }: Props) {
           <Text style={styles.nameHint}>Naming comes after pairing because your wristband decides which animal appears.</Text>
         </View> : <TutorialPoints step={step} />}
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button label={step === lessons.length - 1 ? `Finish with ${mascotName.trim() || 'your mascot'}` : 'Next'} onPress={next} loading={loading} disabled={step === 0 && !mascotName.trim()} icon={step === lessons.length - 1 ? 'sparkles' : 'arrow-forward'} />
+        <Button label={step === lessons.length - 1 ? `Enter Home with ${mascotName.trim() || 'your mascot'}` : step === 0 ? 'Save name and continue' : 'Next'} onPress={next} loading={loading} disabled={step === 0 && !mascotName.trim()} icon={step === lessons.length - 1 ? 'sparkles' : 'arrow-forward'} />
       </ScrollView>
     </KeyboardAvoidingView>
   </SafeAreaView>;

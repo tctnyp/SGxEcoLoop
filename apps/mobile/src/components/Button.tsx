@@ -10,9 +10,10 @@ type Props = {
   icon?: keyof typeof Ionicons.glyphMap;
   loading?: boolean;
   disabled?: boolean;
+  compact?: boolean;
 };
 
-export function Button({ label, onPress, variant = 'primary', icon, loading, disabled }: Props) {
+export function Button({ label, onPress, variant = 'primary', icon, loading, disabled, compact = false }: Props) {
   const isPrimary = variant === 'primary';
   const isText = variant === 'text';
   return (
@@ -24,6 +25,7 @@ export function Button({ label, onPress, variant = 'primary', icon, loading, dis
       accessibilityState={{ disabled: Boolean(disabled), busy: Boolean(loading) }}
       style={({ pressed, hovered }: { pressed: boolean; hovered?: boolean }) => [
         styles.base,
+        compact && styles.compact,
         isPrimary ? styles.primary : isText ? styles.text : styles.secondary,
         (pressed || hovered) && styles.hovered,
         (disabled || loading) && styles.disabled,
@@ -32,9 +34,9 @@ export function Button({ label, onPress, variant = 'primary', icon, loading, dis
       {loading ? (
         <ActivityIndicator color={isPrimary ? colors.surface : colors.ink} />
       ) : (
-        <View style={styles.content}>
-          {icon && <Ionicons importantForAccessibility="no-hide-descendants" name={icon} size={20} color={isPrimary ? colors.surface : colors.ink} />}
-          <Text style={[styles.label, isPrimary && styles.primaryLabel, isText && styles.textLabel]}>{label}</Text>
+        <View style={[styles.content, compact && styles.compactContent]}>
+          {icon && <Ionicons importantForAccessibility="no-hide-descendants" name={icon} size={compact ? 18 : 20} color={isPrimary ? colors.surface : colors.ink} />}
+          <Text numberOfLines={1} style={[styles.label, compact && styles.compactLabel, isPrimary && styles.primaryLabel, isText && styles.textLabel]}>{label}</Text>
         </View>
       )}
     </Pressable>
@@ -43,13 +45,16 @@ export function Button({ label, onPress, variant = 'primary', icon, loading, dis
 
 const styles = StyleSheet.create({
   base: { minHeight: 56, borderRadius: 22, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 },
+  compact: { minHeight: 48, borderRadius: 17, paddingHorizontal: 4 },
   primary: { backgroundColor: colors.forest, shadowColor: colors.forestDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 1, shadowRadius: 0, elevation: 3 },
   secondary: { backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.outline },
   text: { backgroundColor: 'transparent', minHeight: 42 },
   hovered: { opacity: 0.86, transform: [{ scale: 0.99 }] },
   disabled: { opacity: 0.52 },
   content: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  compactContent: { gap: 4 },
   label: { color: colors.ink, fontWeight: '800', fontSize: 16, letterSpacing: 0.1 },
+  compactLabel: { fontSize: 12, letterSpacing: 0 },
   primaryLabel: { color: colors.surface },
   textLabel: { color: colors.forest, fontSize: 15 },
 });

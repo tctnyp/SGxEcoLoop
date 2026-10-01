@@ -44,6 +44,31 @@ export class ApiError extends Error {
 }
 
 let accountStatusListener: ((status: AccountStatus) => void) | null = null;
+type ResponseCacheEntry = { expiresAt: number; value: unknown };
+const responseCache = new Map<string, ResponseCacheEntry>();
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
+function responseCacheKey(path: string, token?: string) {
+  return `${token ?? 'public'}:${path}`;
+}
+
+function invalidateTokenCache(token: string) {
+  for (const key of responseCache.keys()) if (key.startsWith(`${token}:`)) responseCache.delete(key);
+}
+
+async function cachedRequest<T>(path: string, ttlMs: number, token?: string): Promise<T> {
+  const key = responseCacheKey(path, token);
+  const cached = responseCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+  const pending = inFlightRequests.get(key);
+  if (pending) return pending as Promise<T>;
+  const operation = request<T>(path, undefined, token).then((value) => {
+    responseCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+    return value;
+  }).finally(() => inFlightRequests.delete(key));
+  inFlightRequests.set(key, operation);
+  return operation;
+}
 
 export function setAccountStatusListener(listener: ((status: AccountStatus) => void) | null) {
   accountStatusListener = listener;
@@ -91,8 +116,13 @@ async function request<T>(path: string, options?: RequestInit, token?: string): 
     throw new ApiError(data.message ?? 'Something went wrong. Please try again.', response.status, data.accountStatus, data.code);
   }
 
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  if (response.status === 204) {
+    if (method !== 'GET' && token) invalidateTokenCache(token);
+    return undefined as T;
+  }
+  const result = await response.json() as T;
+  if (method !== 'GET' && token) invalidateTokenCache(token);
+  return result;
 }
 
 export function signIn(email: string, password: string): Promise<AuthResult> {
@@ -155,7 +185,7 @@ export function restoreMobileSession(token: string): Promise<AuthResult> {
 }
 
 export function getAuthProviders(): Promise<Record<OAuthProvider, boolean>> {
-  return request<Record<OAuthProvider, boolean>>('/auth/providers');
+  return cachedRequest<Record<OAuthProvider, boolean>>('/auth/providers', 10 * 60_000);
 }
 
 export function revokeSession(token: string): Promise<void> {
@@ -203,22 +233,22 @@ export async function interactWithWristband(token: string, tagToken: string): Pr
 }
 
 export async function getDailyStatus(token: string) {
-  return request<{ needsWristbandTap: boolean; questBoardDate: string | null; quests: User['dailyQuests'] }>('/member/daily-status', undefined, token);
+  return cachedRequest<{ needsWristbandTap: boolean; questBoardDate: string | null; quests: User['dailyQuests'] }>('/member/daily-status', 10_000, token);
 }
 
 export async function getLocations(kind?: NovoLocation['kind']): Promise<NovoLocation[]> {
-  const result = await request<{ locations: NovoLocation[] }>(`/locations${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`);
+  const result = await cachedRequest<{ locations: NovoLocation[] }>(`/locations${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`, 5 * 60_000);
   return result.locations;
 }
 
 export async function getWristbandPickupLocations(token: string, coordinates?: { latitude: number; longitude: number }): Promise<NovoLocation[]> {
   const query = coordinates ? `?lat=${encodeURIComponent(coordinates.latitude)}&lng=${encodeURIComponent(coordinates.longitude)}` : '';
-  const result = await request<{ lockers: NovoLocation[] }>(`/member/wristband/pickup-locations${query}`, undefined, token);
+  const result = await cachedRequest<{ lockers: NovoLocation[] }>(`/member/wristband/pickup-locations${query}`, 5 * 60_000, token);
   return result.lockers;
 }
 
 export async function getFriends(token: string): Promise<Friend[]> {
-  const result = await request<{ friends: Friend[] }>('/member/friends', undefined, token);
+  const result = await cachedRequest<{ friends: Friend[] }>('/member/friends', 30_000, token);
   return result.friends;
 }
 
@@ -228,11 +258,11 @@ export async function addFriend(token: string, friendId: string): Promise<User> 
 }
 
 export async function getMemberTasks(token: string) {
-  return request<{ quests: User['dailyQuests']; events: NovoEvent[]; submissions: TaskSubmission[]; weeklyCompetition: WeeklyCompetition }>('/member/tasks', undefined, token);
+  return cachedRequest<{ quests: User['dailyQuests']; events: NovoEvent[]; submissions: TaskSubmission[]; weeklyCompetition: WeeklyCompetition }>('/member/tasks', 15_000, token);
 }
 
 export async function getMemberImpact(token: string) {
-  return request<ImpactSummary>('/member/impact', undefined, token);
+  return cachedRequest<ImpactSummary>('/member/impact', 30_000, token);
 }
 
 export async function startWeeklyCompetition(token: string) {
@@ -244,7 +274,7 @@ export async function completeWeeklyCompetition(token: string, answers: number[]
 }
 
 export async function getMemberMarket(token: string) {
-  return request<{ items: MarketItem[] }>('/member/market', undefined, token);
+  return cachedRequest<{ items: MarketItem[] }>('/member/market', 2 * 60_000, token);
 }
 
 export async function submitCustomTask(token: string, input: { title: string; description: string; photoDataUrl: string }) {

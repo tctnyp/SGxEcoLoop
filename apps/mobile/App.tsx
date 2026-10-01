@@ -41,6 +41,7 @@ import { colors } from './src/theme';
 const SESSION_KEY = 'novo-mobile-session';
 const LAST_PROFILE_KEY = 'novo-last-profile';
 const profileKey = (email: string) => `novo-profile:${email.toLowerCase()}`;
+const homeGuideKey = (userId: string) => `novo-home-guide:${userId}`;
 
 function NovoApp() {
   const [fontsLoaded] = useFonts({ GoogleSansFlex: require('./assets/fonts/GoogleSansFlex-Regular.ttf') });
@@ -50,6 +51,7 @@ function NovoApp() {
   const [booting, setBooting] = useState(true);
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('active');
   const [checkingAccess, setCheckingAccess] = useState(false);
+  const [showHomeGuide, setShowHomeGuide] = useState(false);
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
   const screenRef = useRef<Screen>('signin');
@@ -98,7 +100,10 @@ function NovoApp() {
     void syncNotificationSchedule(nextUser.notificationPreferences).catch(() => undefined);
     if (!nextUser.wristbandPaired) setScreen('pair-wristband');
     else if (nextUser.onboardingCompleted === false) setScreen('tutorial');
-    else setScreen('home');
+    else {
+      setShowHomeGuide(await AsyncStorage.getItem(homeGuideKey(nextUser.id)) === 'pending');
+      setScreen('home');
+    }
   };
 
   const rememberSession = async (token: string) => {
@@ -115,6 +120,7 @@ function NovoApp() {
     setUser(null);
     setDraft(undefined);
     setAccountStatus('active');
+    setShowHomeGuide(false);
     setScreen('signin');
   };
 
@@ -293,8 +299,15 @@ function NovoApp() {
   const handleTutorialComplete = async (mascotName: string) => {
     const updated = await completeMemberOnboarding(requireToken(), mascotName);
     await saveUser(updated);
+    await AsyncStorage.setItem(homeGuideKey(updated.id), 'pending');
+    setShowHomeGuide(true);
     setScreen('home');
     return updated;
+  };
+
+  const handleHomeGuideComplete = async () => {
+    if (user) await AsyncStorage.setItem(homeGuideKey(user.id), 'complete');
+    setShowHomeGuide(false);
   };
 
   const handleEquip = async (accessoryId: AccessoryId) => {
@@ -399,7 +412,7 @@ function NovoApp() {
       {screen === 'onboarding' && <OnboardingScreen draft={draft} onBack={() => setScreen('signin')} onComplete={handleProfileCreated} />}
       {screen === 'pair-wristband' && user && <PairWristbandScreen user={user} loadPickupLocations={handleLoadWristbandPickupLocations} onPair={handlePairRequest} onReserve={handleReserveWristbandPickup} onPaired={handlePaired} onSignOut={clearSession} />}
       {screen === 'tutorial' && user && <TutorialScreen user={user} onComplete={handleTutorialComplete} />}
-      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
+      {screen === 'home' && user && <HomeScreen user={user} token={requireToken()} showHomeGuide={showHomeGuide} onHomeGuideComplete={handleHomeGuideComplete} onUserUpdated={saveUser} onUpdateProfile={handleUpdateProfile} onChangePassword={handleChangePassword} onLinkAccount={handleLinkAccount} onWristbandTag={handleWristbandInteraction} onToggleAccessory={handleEquip} onPurchase={handlePurchase} onContribute={handleContribute} onRedeemCoupon={handleRedeemCoupon} onUpdateNotificationPreferences={handleNotificationPreferences} onUnpair={handleUnpair} onDeleteAccount={handleDeleteAccount} onSignOut={clearSession} />}
       {screen === 'account-status' && <SafeAreaView style={styles.statusScreen}><View style={styles.statusCard}><View style={styles.statusIcon}><Text style={styles.statusIconText}>!</Text></View><Text style={styles.statusEyebrow}>ACCOUNT SUSPENDED</Text><Text style={styles.statusTitle}>Access to novo is paused</Text><Text style={styles.statusCopy}>An administrator has suspended this account. Your profile and progress are still saved. Ask an administrator to set the account back to Active, then check again here.</Text><Pressable style={styles.primaryButton} disabled={checkingAccess} onPress={() => void handleCheckAccess()}><Text style={styles.primaryButtonText}>{checkingAccess ? 'Checking…' : 'Check access again'}</Text></Pressable><Pressable style={styles.secondaryButton} onPress={() => void clearSession()}><Text style={styles.secondaryButtonText}>Sign out</Text></Pressable></View></SafeAreaView>}
     </SafeAreaProvider>
   );
