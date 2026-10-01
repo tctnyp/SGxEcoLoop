@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts } from 'expo-font';
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, AppState, Easing, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   ApiError,
@@ -27,6 +28,7 @@ import {
   changeMemberPassword,
   updateNotificationPreferences,
   unpairWristband,
+  warmAppCache,
 } from './src/api';
 import { AppErrorBoundary } from './src/components/AppErrorBoundary';
 import { sendLocalNotification, syncNotificationSchedule } from './src/notifications';
@@ -43,6 +45,36 @@ const LAST_PROFILE_KEY = 'novo-last-profile';
 const profileKey = (email: string) => `novo-profile:${email.toLowerCase()}`;
 const homeGuideKey = (userId: string) => `novo-home-guide:${userId}`;
 
+function StartupScreen({ introComplete, message, onIntroComplete }: { introComplete: boolean; message: string; onIntroComplete: () => void }) {
+  const fall = useRef(new Animated.Value(0)).current;
+  const brand = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.parallel([
+      Animated.timing(fall, { toValue: 1, duration: 1_250, easing: Easing.bezier(0.18, 0.72, 0.28, 1), useNativeDriver: true }),
+      Animated.sequence([
+        Animated.delay(760),
+        Animated.spring(brand, { toValue: 1, damping: 13, stiffness: 115, mass: 0.8, useNativeDriver: true }),
+      ]),
+    ]);
+    animation.start(({ finished }) => { if (finished) onIntroComplete(); });
+    return () => animation.stop();
+  }, [brand, fall, onIntroComplete]);
+
+  const leafRotation = fall.interpolate({ inputRange: [0, 0.28, 0.56, 0.8, 1], outputRange: ['-38deg', '24deg', '-18deg', '12deg', '0deg'] });
+  const leafX = fall.interpolate({ inputRange: [0, 0.22, 0.48, 0.72, 1], outputRange: [-34, 28, -20, 12, 0] });
+  const leafY = fall.interpolate({ inputRange: [0, 1], outputRange: [-310, -33] });
+
+  return <View style={styles.startupScreen} accessibilityLabel={introComplete ? message : 'novo is starting'}>
+    <StatusBar style="light" />
+    <View style={styles.startupStage}>
+      <Animated.View style={[styles.startupLeaf, { transform: [{ translateX: leafX }, { translateY: leafY }, { rotate: leafRotation }] }]}><Ionicons name="leaf" size={46} color="#DFFC76" /></Animated.View>
+      <Animated.View style={[styles.startupBrand, { opacity: brand, transform: [{ scale: brand.interpolate({ inputRange: [0, 1], outputRange: [0.88, 1] }) }] }]}><View style={styles.startupLogoMark}><Ionicons name="leaf" size={27} color="#17352A" /></View><Text style={styles.startupWordmark}>novo</Text></Animated.View>
+    </View>
+    {introComplete ? <View style={styles.startupLoader} accessibilityLiveRegion="polite"><ActivityIndicator size="small" color="#DFFC76" /><Text style={styles.startupMessage}>{message}</Text><Text style={styles.startupHint}>Preparing your map, quests and rewards</Text></View> : <View style={styles.startupLoaderPlaceholder} />}
+  </View>;
+}
+
 function NovoApp() {
   const [fontsLoaded] = useFonts({ GoogleSansFlex: require('./assets/fonts/GoogleSansFlex-Regular.ttf') });
   const [screen, setScreen] = useState<Screen>('signin');
@@ -52,9 +84,18 @@ function NovoApp() {
   const [accountStatus, setAccountStatus] = useState<AccountStatus>('active');
   const [checkingAccess, setCheckingAccess] = useState(false);
   const [showHomeGuide, setShowHomeGuide] = useState(false);
+  const [introComplete, setIntroComplete] = useState(false);
+  const [loaderDwellComplete, setLoaderDwellComplete] = useState(false);
+  const [bootMessage, setBootMessage] = useState('Connecting to novo…');
   const tokenRef = useRef<string | null>(null);
   const pendingFriendRef = useRef<string | null>(null);
   const screenRef = useRef<Screen>('signin');
+
+  const handleIntroComplete = useCallback(() => {
+    setIntroComplete(true);
+    const timeout = setTimeout(() => setLoaderDwellComplete(true), 420);
+    return () => clearTimeout(timeout);
+  }, []);
 
   useEffect(() => { screenRef.current = screen; }, [screen]);
 
@@ -175,11 +216,23 @@ function NovoApp() {
 
     const restore = async () => {
       try {
+        const storedToken = await AsyncStorage.getItem(SESSION_KEY);
+        while (mounted) {
+          try {
+            setBootMessage('Loading your novo world…');
+            await warmAppCache(storedToken ?? undefined);
+            break;
+          } catch {
+            setBootMessage('Waiting for a secure connection…');
+            await new Promise((resolve) => setTimeout(resolve, 3_000));
+          }
+        }
+        if (!mounted) return;
+        setBootMessage('Restoring your progress…');
         const initialUrl = await Linking.getInitialURL();
         if (await exchangeHandoffUrl(initialUrl)) return;
         captureFriendInvite(initialUrl);
 
-        const storedToken = await AsyncStorage.getItem(SESSION_KEY);
         if (!storedToken) return;
         try {
           const result = await restoreMobileSession(storedToken);
@@ -400,8 +453,8 @@ function NovoApp() {
     }
   };
 
-  if (!fontsLoaded || booting) {
-    return <View style={styles.loading}><ActivityIndicator color={colors.forest} size="large" /></View>;
+  if (!fontsLoaded || booting || !introComplete || !loaderDwellComplete) {
+    return <StartupScreen introComplete={introComplete} message={bootMessage} onIntroComplete={handleIntroComplete} />;
   }
 
   return (
@@ -428,6 +481,16 @@ export default function App() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cream },
+  startupScreen: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
+  startupStage: { width: 240, height: 150, alignItems: 'center', justifyContent: 'flex-end' },
+  startupLeaf: { position: 'absolute', top: 38, zIndex: 3 },
+  startupBrand: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  startupLogoMark: { width: 51, height: 51, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DFFC76', transform: [{ rotate: '-5deg' }] },
+  startupWordmark: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 43, lineHeight: 48, fontWeight: '800', letterSpacing: -2 },
+  startupLoader: { position: 'absolute', bottom: '19%', minHeight: 72, alignItems: 'center', justifyContent: 'center', gap: 7 },
+  startupLoaderPlaceholder: { position: 'absolute', bottom: '19%', height: 72 },
+  startupMessage: { color: '#FFFFFF', fontFamily: 'GoogleSansFlex', fontSize: 14, fontWeight: '700' },
+  startupHint: { color: 'rgba(255,255,255,0.58)', fontFamily: 'GoogleSansFlex', fontSize: 11 },
   limitedBanner: { paddingHorizontal: 18, paddingBottom: 12, backgroundColor: '#FFF2C7', borderBottomWidth: 1, borderBottomColor: '#E2C66F' },
   limitedTitle: { color: '#5D4300', fontFamily: 'GoogleSansFlex', fontSize: 15, fontWeight: '700' },
   limitedCopy: { marginTop: 2, color: '#725A18', fontFamily: 'GoogleSansFlex', fontSize: 12, lineHeight: 16 },

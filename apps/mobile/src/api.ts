@@ -188,6 +188,20 @@ export function getAuthProviders(): Promise<Record<OAuthProvider, boolean>> {
   return cachedRequest<Record<OAuthProvider, boolean>>('/auth/providers', 10 * 60_000);
 }
 
+export async function warmAppCache(token?: string): Promise<void> {
+  await request<{ ok: boolean }>('/health');
+  await Promise.all([getAuthProviders(), getLocations()]);
+  if (!token) return;
+  await Promise.allSettled([
+    getDailyStatus(token),
+    getFriends(token),
+    getMemberTasks(token),
+    getMemberImpact(token),
+    getMemberMarket(token),
+    getWristbandPickupLocations(token),
+  ]);
+}
+
 export function revokeSession(token: string): Promise<void> {
   return request<void>('/auth/sign-out', { method: 'POST' }, token);
 }

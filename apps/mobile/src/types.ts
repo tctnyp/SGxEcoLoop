@@ -91,6 +91,9 @@ export type NovoEvent = {
   status: 'live' | 'scheduled';
   latitude: number | null;
   longitude: number | null;
+  description?: string;
+  organizerName?: string;
+  sourceUrl?: string;
 };
 
 export type TaskSubmission = { id: string; task: string; note: string; status: 'pending' | 'approved' | 'changes_requested'; points: number | null; aiConfidence: number | null; createdAt: string; questId?: string; reviewNote?: string | null; reviewedAt?: string | null; wasteStream: WasteStream | null; wasteAction: WasteAction | null; estimatedWeightKg: number | null; impactSource: 'measured' | 'calibrated' | 'unavailable' | null };

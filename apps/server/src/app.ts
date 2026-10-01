@@ -75,6 +75,9 @@ type PortalEvent = {
   status: 'draft' | 'open' | 'completed';
   latitude: number | null;
   longitude: number | null;
+  description?: string;
+  organizerName?: string;
+  sourceUrl?: string;
 };
 type PortalAccount = { id: string; name: string; email: string; role: 'member' | PortalRole; status: AccountStatus };
 type MarketItem = { id: string; name: string; category: 'accessory' | 'charity' | 'coupon'; price: number; stock: number | null; active: boolean; description: string; imageDataUrl: string | null; accessoryId: AccessoryId | null };
@@ -288,6 +291,30 @@ function pilotMetrics() {
   };
 }
 
+function showcaseMetrics() {
+  const participants = [...users.values()].filter((user) => !user.email.toLowerCase().endsWith('@demo.novo.sg'));
+  const participantIds = new Set(participants.map((user) => user.id));
+  const approvedSubmissions = [...submissions.values()].filter((submission) => participantIds.has(submission.userId) && submission.status === 'approved');
+  const impact = participants.reduce((result, user) => ({
+    divertedKg: result.divertedKg + user.impact.divertedKg,
+    approvedActions: result.approvedActions + user.impact.approvedActions,
+  }), { divertedKg: 0, approvedActions: 0 });
+  const eventCheckIns = [...portalEvents.values()].reduce((total, event) => total + event.checkedInUserIds.filter((userId) => participantIds.has(userId)).length, 0);
+  const startedAt = process.env.NOVO_SHOWCASE_STARTED_AT
+    || participants.map((user) => user.createdAt).filter(Boolean).sort()[0]
+    || null;
+  const now = Date.now();
+  return {
+    generatedAt: new Date().toISOString(),
+    startedAt,
+    participants: participants.length,
+    verifiedActions: Math.max(approvedSubmissions.length, impact.approvedActions),
+    divertedKg: rounded(impact.divertedKg),
+    eventCheckIns,
+    upcomingEvents: [...portalEvents.values()].filter((event) => event.status === 'open' && Date.parse(event.startsAt) + event.durationMinutes * 60_000 >= now).length,
+  };
+}
+
 function inferLegacyImpact(submission: Submission) {
   const task = submission.task.toLowerCase();
   const inferred = task.includes('food') || task.includes('meal')
@@ -395,6 +422,9 @@ function coordinatesForSingaporeLocation(location: string) {
     [['sengkang'], 1.3917, 103.8950],
     [['serangoon'], 1.3496, 103.8737],
     [['kallang'], 1.3100, 103.8660],
+    [['joo chiat'], 1.3142, 103.9006],
+    [['kampung admiralty'], 1.4402, 103.8000],
+    [['gardens by the bay', 'flower dome'], 1.2816, 103.8636],
     [['yishun'], 1.4295, 103.8350],
     [['choa chu kang'], 1.3854, 103.7443],
   ];
@@ -402,11 +432,35 @@ function coordinatesForSingaporeLocation(location: string) {
   return match ? { latitude: match[1], longitude: match[2] } : { latitude: null, longitude: null };
 }
 
+const officialShowcaseEvents: PortalEvent[] = [
+  {
+    id: 'official-cgs-joo-chiat-2026', organizerId: 'official-nea', title: 'Urban Sustainability Bike Tour @ Joo Chiat', location: 'Joo Chiat Road, Singapore', startsAt: '2026-10-03T17:00:00+08:00', durationMinutes: 120, capacity: null, points: 180, attendees: [], checkedInUserIds: [], status: 'open', latitude: 1.3142, longitude: 103.9006,
+    description: 'Cycle through Joo Chiat to explore reuse, climate adaptation, green infrastructure and practical low-carbon choices during Car-Free Day.', organizerName: 'National Environment Agency', sourceUrl: 'https://www.nea.gov.sg/media/news/news/index/clean-and-green-singapore-2026--collective-ownership-for-a-liveable--climate-resilient-future',
+  },
+  {
+    id: 'official-international-ewaste-day-2026', organizerId: 'official-nea', title: 'International E-Waste Day 2026', location: 'Kampung Admiralty, Singapore', startsAt: '2026-10-10T09:30:00+08:00', durationMinutes: 330, capacity: null, points: 160, attendees: [], checkedInUserIds: [], status: 'open', latitude: 1.4402, longitude: 103.8000,
+    description: 'Try an e-waste sorting relay, upcycling workshops and trivia while learning how electronics and personal data are recycled safely.', organizerName: 'NEA and ALBA E-Waste Smart Recycling', sourceUrl: 'https://www.nea.gov.sg/media/news/news/index/clean-and-green-singapore-2026--collective-ownership-for-a-liveable--climate-resilient-future',
+  },
+  {
+    id: 'official-race-to-sustainability-fair-2026', organizerId: 'official-nea', title: 'Race to Sustainability Weekend Fair', location: 'Canopy outside Flower Dome, Gardens by the Bay', startsAt: '2026-10-24T10:00:00+08:00', durationMinutes: 420, capacity: null, points: 140, attendees: [], checkedInUserIds: [], status: 'open', latitude: 1.2816, longitude: 103.8636,
+    description: 'Explore interactive booths and workshops on food waste, disposables, recycling right and Singapore’s Beverage Container Return Scheme.', organizerName: 'Gardens by the Bay and NEA', sourceUrl: 'https://www.nea.gov.sg/media/news/news/index/clean-and-green-singapore-2026--collective-ownership-for-a-liveable--climate-resilient-future',
+  },
+  {
+    id: 'official-cgs-day-2026', organizerId: 'official-nea', title: 'Clean & Green Singapore Day 2026', location: 'Kampung Admiralty, Singapore', startsAt: '2026-11-21T08:00:00+08:00', durationMinutes: 180, capacity: null, points: 200, attendees: [], checkedInUserIds: [], status: 'open', latitude: 1.4402, longitude: 103.8000,
+    description: 'Join the Clean & Green Quest, discover sustainability careers and learn how everyday choices support a cleaner, climate-resilient Singapore.', organizerName: 'Clean & Green Singapore', sourceUrl: 'https://www.nea.gov.sg/media/news/news/index/clean-and-green-singapore-2026--collective-ownership-for-a-liveable--climate-resilient-future',
+  },
+];
+
 const databaseReady = initializeDatabase(databaseCollections).then(async () => {
   let changed = false;
   const now = Date.now();
   if (taskTemplates.size === 0) {
     for (const template of defaultTaskTemplates) taskTemplates.set(template.id, template);
+    changed = true;
+  }
+  for (const event of officialShowcaseEvents) {
+    if (portalEvents.has(event.id)) continue;
+    portalEvents.set(event.id, structuredClone(event));
     changed = true;
   }
   for (const account of portalAccounts.values()) {
@@ -1207,6 +1261,9 @@ function memberEventView(event: PortalEvent, user: User, now = Date.now()) {
     status: Date.parse(event.startsAt) <= now ? 'live' as const : 'scheduled' as const,
     latitude: event.latitude,
     longitude: event.longitude,
+    description: event.description,
+    organizerName: event.organizerName,
+    sourceUrl: event.sourceUrl,
   };
 }
 
@@ -1218,6 +1275,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use((request, response, next) => {
   if (request.method !== 'GET') return next();
   if (request.path === '/api/auth/providers') response.setHeader('Cache-Control', 'public, max-age=600, stale-while-revalidate=3600');
+  else if (request.path === '/api/showcase/metrics') response.setHeader('Cache-Control', 'public, max-age=5, stale-while-revalidate=15');
   else if (request.path === '/api/locations') response.setHeader('Cache-Control', 'public, max-age=300, stale-while-revalidate=1800');
   else if (request.path.startsWith('/api/member/')) response.setHeader('Cache-Control', 'private, no-cache');
   next();
@@ -1256,6 +1314,10 @@ app.use((request, response, next) => {
 
 app.get('/api/health', (_request, response) => {
   response.json({ ok: true, service: 'novo-api' });
+});
+
+app.get('/api/showcase/metrics', (_request, response) => {
+  response.json(showcaseMetrics());
 });
 
 app.get('/api/auth/providers', (_request, response) => {
