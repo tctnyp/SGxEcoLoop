@@ -55,8 +55,8 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
 
   useEffect(() => {
     const animation = Animated.sequence([
-      Animated.timing(flight, { toValue: 1, duration: 6_300, easing: Easing.linear, useNativeDriver: true }),
-      Animated.spring(reveal, { toValue: 1, damping: 17, stiffness: 125, mass: 0.78, useNativeDriver: false }),
+      Animated.timing(flight, { toValue: 1, duration: 3_500, easing: Easing.bezier(0.34, 0.04, 0.5, 1), useNativeDriver: true }),
+      Animated.spring(reveal, { toValue: 1, damping: 18, stiffness: 150, mass: 0.68, useNativeDriver: false }),
     ]);
     animation.start(({ finished }) => { if (finished) onIntroComplete(); });
     return () => animation.stop();
@@ -69,12 +69,14 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
     return () => { clearTimeout(timeout); animation.stop(); };
   }, [exit, onExitComplete, ready]);
 
-  const flightSteps = [0, 0.09, 0.2, 0.31, 0.43, 0.56, 0.68, 0.8, 0.9, 0.96, 1];
-  const markRotation = flight.interpolate({ inputRange: flightSteps, outputRange: ['-34deg', '31deg', '-26deg', '38deg', '-31deg', '27deg', '-22deg', '17deg', '-11deg', '5deg', '0deg'] });
-  const markX = flight.interpolate({ inputRange: flightSteps, outputRange: [-8, 48, -42, 56, -49, 41, -34, 27, -17, 8, 0] });
-  const markY = flight.interpolate({ inputRange: flightSteps, outputRange: [-300, -260, -205, -222, -158, -130, -88, -98, -44, -12, 0] });
-  const markScale = flight.interpolate({ inputRange: [0, 0.22, 0.5, 0.78, 0.93, 1], outputRange: [0.7, 0.8, 0.88, 0.94, 1.04, 1] });
-  const gustOpacity = flight.interpolate({ inputRange: [0, 0.08, 0.72, 0.9, 1], outputRange: [0, 0.3, 0.22, 0.08, 0] });
+  const flightSteps = [0, 0.08, 0.17, 0.27, 0.38, 0.5, 0.62, 0.73, 0.83, 0.91, 0.97, 1];
+  const markRotation = flight.interpolate({ inputRange: flightSteps, outputRange: ['-25deg', '22deg', '-20deg', '26deg', '-19deg', '17deg', '-13deg', '10deg', '-7deg', '4deg', '-2deg', '0deg'] });
+  const markFlutterX = flight.interpolate({ inputRange: flightSteps, outputRange: ['18deg', '-25deg', '21deg', '-20deg', '17deg', '-15deg', '12deg', '-10deg', '7deg', '-4deg', '2deg', '0deg'] });
+  const markFlutterY = flight.interpolate({ inputRange: flightSteps, outputRange: ['-12deg', '18deg', '-16deg', '15deg', '-13deg', '11deg', '-9deg', '7deg', '-5deg', '3deg', '-1deg', '0deg'] });
+  const markX = flight.interpolate({ inputRange: flightSteps, outputRange: [-12, 38, -47, 52, -44, 39, -31, 25, -18, 11, -4, 0] });
+  const markY = flight.interpolate({ inputRange: flightSteps, outputRange: [-300, -278, -247, -215, -181, -147, -113, -82, -54, -30, -10, 0] });
+  const markScale = flight.interpolate({ inputRange: [0, 0.22, 0.5, 0.78, 0.94, 1], outputRange: [0.78, 0.83, 0.89, 0.95, 1.02, 1] });
+  const gustOpacity = flight.interpolate({ inputRange: [0, 0.07, 0.58, 0.82, 1], outputRange: [0, 0.28, 0.2, 0.07, 0] });
 
   return <Animated.View style={[styles.startupScreen, { opacity: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }), transform: [{ scale: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]} accessibilityLabel={introComplete ? message : 'novo is starting'}>
     <StatusBar style="light" />
@@ -82,7 +84,7 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
       <Animated.View style={[styles.startupGust, styles.startupGustUpper, { opacity: gustOpacity, transform: [{ translateX: markX }] }]} />
       <Animated.View style={[styles.startupGust, styles.startupGustLower, { opacity: gustOpacity, transform: [{ translateX: markX }] }]} />
       <View style={styles.startupLockup}>
-        <Animated.View style={[styles.startupMark, { transform: [{ translateX: markX }, { translateY: markY }, { rotate: markRotation }, { scale: markScale }] }]}>
+        <Animated.View style={[styles.startupMark, { transform: [{ perspective: 420 }, { translateX: markX }, { translateY: markY }, { rotateX: markFlutterX }, { rotateY: markFlutterY }, { rotate: markRotation }, { scale: markScale }] }]}>
           <View style={styles.startupLeaf}>
             <View style={styles.startupLeafVein} />
           </View>
