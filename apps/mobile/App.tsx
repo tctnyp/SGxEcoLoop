@@ -49,18 +49,18 @@ const isShowcaseDemo = () => Platform.OS === 'web'
   && /^\/demo\/?$/.test(window.location.pathname);
 
 function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitComplete }: { introComplete: boolean; message: string; ready: boolean; onIntroComplete: () => void; onExitComplete: () => void }) {
-  const fall = useRef(new Animated.Value(0)).current;
+  const flight = useRef(new Animated.Value(0)).current;
   const reveal = useRef(new Animated.Value(0)).current;
   const exit = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     const animation = Animated.sequence([
-      Animated.timing(fall, { toValue: 1, duration: 1_050, easing: Easing.bezier(0.16, 0.76, 0.26, 1), useNativeDriver: true }),
-      Animated.spring(reveal, { toValue: 1, damping: 16, stiffness: 150, mass: 0.72, useNativeDriver: false }),
+      Animated.timing(flight, { toValue: 1, duration: 6_300, easing: Easing.linear, useNativeDriver: true }),
+      Animated.spring(reveal, { toValue: 1, damping: 17, stiffness: 125, mass: 0.78, useNativeDriver: false }),
     ]);
     animation.start(({ finished }) => { if (finished) onIntroComplete(); });
     return () => animation.stop();
-  }, [fall, onIntroComplete, reveal]);
+  }, [flight, onIntroComplete, reveal]);
 
   useEffect(() => {
     if (!ready) return undefined;
@@ -69,14 +69,18 @@ function StartupScreen({ introComplete, message, ready, onIntroComplete, onExitC
     return () => { clearTimeout(timeout); animation.stop(); };
   }, [exit, onExitComplete, ready]);
 
-  const markRotation = fall.interpolate({ inputRange: [0, 0.18, 0.38, 0.58, 0.76, 0.9, 1], outputRange: ['-42deg', '24deg', '-18deg', '13deg', '-8deg', '4deg', '0deg'] });
-  const markX = fall.interpolate({ inputRange: [0, 0.18, 0.38, 0.58, 0.76, 0.9, 1], outputRange: [-34, 27, -20, 14, -8, 4, 0] });
-  const markY = fall.interpolate({ inputRange: [0, 0.82, 0.91, 0.97, 1], outputRange: [-430, 12, -7, 3, 0] });
-  const markScale = fall.interpolate({ inputRange: [0, 0.74, 0.88, 1], outputRange: [0.76, 1.06, 0.96, 1] });
+  const flightSteps = [0, 0.09, 0.2, 0.31, 0.43, 0.56, 0.68, 0.8, 0.9, 0.96, 1];
+  const markRotation = flight.interpolate({ inputRange: flightSteps, outputRange: ['-34deg', '31deg', '-26deg', '38deg', '-31deg', '27deg', '-22deg', '17deg', '-11deg', '5deg', '0deg'] });
+  const markX = flight.interpolate({ inputRange: flightSteps, outputRange: [-8, 48, -42, 56, -49, 41, -34, 27, -17, 8, 0] });
+  const markY = flight.interpolate({ inputRange: flightSteps, outputRange: [-300, -260, -205, -222, -158, -130, -88, -98, -44, -12, 0] });
+  const markScale = flight.interpolate({ inputRange: [0, 0.22, 0.5, 0.78, 0.93, 1], outputRange: [0.7, 0.8, 0.88, 0.94, 1.04, 1] });
+  const gustOpacity = flight.interpolate({ inputRange: [0, 0.08, 0.72, 0.9, 1], outputRange: [0, 0.3, 0.22, 0.08, 0] });
 
   return <Animated.View style={[styles.startupScreen, { opacity: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }), transform: [{ scale: exit.interpolate({ inputRange: [0, 1], outputRange: [1, 1.035] }) }] }]} accessibilityLabel={introComplete ? message : 'novo is starting'}>
     <StatusBar style="light" />
     <View style={styles.startupStage}>
+      <Animated.View style={[styles.startupGust, styles.startupGustUpper, { opacity: gustOpacity, transform: [{ translateX: markX }] }]} />
+      <Animated.View style={[styles.startupGust, styles.startupGustLower, { opacity: gustOpacity, transform: [{ translateX: markX }] }]} />
       <View style={styles.startupLockup}>
         <Animated.View style={[styles.startupMark, { transform: [{ translateX: markX }, { translateY: markY }, { rotate: markRotation }, { scale: markScale }] }]}>
           <View style={styles.startupLeaf}>
@@ -525,6 +529,9 @@ const styles = StyleSheet.create({
   startupScreen: { ...StyleSheet.absoluteFillObject, zIndex: 1000, alignItems: 'center', justifyContent: 'center', backgroundColor: '#17352A', overflow: 'hidden' },
   startupStage: { width: 240, height: 96, alignItems: 'center', justifyContent: 'center' },
   startupLockup: { height: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  startupGust: { position: 'absolute', width: 72, height: 3, borderRadius: 99, backgroundColor: 'rgba(223,252,118,0.45)' },
+  startupGustUpper: { left: 18, top: 29 },
+  startupGustLower: { right: 26, bottom: 23, width: 48, height: 2 },
   startupMark: { zIndex: 3, width: 54, height: 54, alignItems: 'center', justifyContent: 'center' },
   startupLeaf: { width: 35, height: 45, borderTopLeftRadius: 31, borderTopRightRadius: 7, borderBottomLeftRadius: 8, borderBottomRightRadius: 31, backgroundColor: '#DFFC76', transform: [{ rotate: '11deg' }], overflow: 'hidden' },
   startupLeafVein: { position: 'absolute', width: 2, height: 35, left: 17, top: 11, borderRadius: 2, backgroundColor: 'rgba(23,53,42,0.32)', transform: [{ rotate: '-40deg' }] },

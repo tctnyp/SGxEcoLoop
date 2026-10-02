@@ -31,7 +31,7 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   const [loading, setLoading] = useState<'email' | 'password' | OAuthProvider | 'reset' | null>(null);
   const [providers, setProviders] = useState<Record<OAuthProvider, boolean>>({ google: true, discord: true, microsoft: false });
   const tinyViewport = !wide && height < 620;
-  const constrained = !wide && (keyboardVisible || tinyViewport);
+  const keyboardMode = !wide && keyboardVisible;
 
   useEffect(() => {
     const shown = Keyboard.addListener('keyboardDidShow', () => setKeyboardVisible(true));
@@ -132,8 +132,8 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={[styles.page, wide ? styles.pageWide : styles.pageCompact]}>
-          <View style={[styles.hero, wide ? styles.heroWide : styles.heroCompact, short && styles.heroCompactShort, constrained && styles.heroCompactKeyboard, tinyViewport && !keyboardVisible && styles.heroCompactTiny]}>
+        <View style={[styles.page, wide ? styles.pageWide : styles.pageCompact, keyboardMode && styles.pageCompactKeyboard]}>
+          <View style={[styles.hero, wide ? styles.heroWide : styles.heroCompact, short && styles.heroCompactShort, keyboardMode && styles.heroCompactKeyboard, tinyViewport && !keyboardVisible && styles.heroCompactTiny]}>
             <View style={styles.heroTop}>
               <Logo inverse compact={!wide} />
               <View style={styles.pill}><Text style={styles.pillText}>small habits · real change</Text></View>
@@ -148,23 +148,23 @@ export function SignInScreen({ onAuthenticated, onSignUp }: Props) {
             {(!keyboardVisible || wide) && <Text style={[styles.heroFooter, wide && styles.heroFooterWide, short && styles.heroFooterShort]}>novo means “renew” — and every day is a fresh start.</Text>}
           </View>
 
-          <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, constrained && styles.panelCompactKeyboard, tinyViewport && !keyboardVisible && styles.panelCompactTiny]}>
-            <View style={[styles.panelContent, constrained && styles.panelContentKeyboard, step === 'password' && !recovering && styles.panelContentPassword]}>
-              <View style={[styles.formHeader, constrained && styles.formHeaderKeyboard]}>
+          <View style={[styles.panel, wide ? styles.panelWide : styles.panelCompact, short && styles.panelCompactShort, keyboardMode && styles.panelCompactKeyboard, tinyViewport && !keyboardVisible && styles.panelCompactTiny]}>
+            <View style={[styles.panelContent, keyboardMode && styles.panelContentKeyboard, step === 'password' && !recovering && styles.panelContentPassword]}>
+              <View style={[styles.formHeader, keyboardMode && styles.formHeaderKeyboard]}>
                 <Text accessibilityRole="header" style={styles.title}>{recovering ? 'Reset password' : step === 'email' ? (wide ? 'Welcome back' : 'Hello! 👋') : 'Welcome back'}</Text>
                 <Text accessibilityLiveRegion="polite" style={styles.subtitle}>{recovering ? 'We’ll send a secure reset link to your email.' : step === 'email' ? 'Ready to make today a little lighter?' : 'Enter your password to continue.'}</Text>
               </View>
 
               <View style={styles.form}>
                 {recovering ? <><TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); setNotice(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handlePasswordReset()}/>{notice ? <View accessibilityLiveRegion="polite" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}<Button label="Send reset link" onPress={handlePasswordReset} loading={loading === 'reset'}/><Button label="Back to sign in" variant="text" onPress={() => { setRecovering(false); setError(''); setNotice(''); }}/></> : step === 'email' ? <>
-                <><View style={[styles.socialButtons, constrained && styles.socialButtonsKeyboard]}>
+                {!keyboardMode && <><View style={styles.socialButtons}>
                   {providers.google && <View style={styles.socialButton}><Button compact label="Google" icon="logo-google" variant="secondary" onPress={handleGoogle} loading={loading === 'google'} disabled={loading !== null}/></View>}
                   {providers.discord && <View style={styles.socialButton}><Button compact label="Discord" icon="logo-discord" variant="secondary" onPress={handleDiscord} loading={loading === 'discord'} disabled={loading !== null}/></View>}
                   {providers.microsoft && <View style={styles.socialButton}><Button compact label="Microsoft" icon="logo-windows" variant="secondary" onPress={handleMicrosoft} loading={loading === 'microsoft'} disabled={loading !== null}/></View>}
-                </View><View style={[styles.divider, constrained && styles.dividerKeyboard]}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>
+                </View><View style={styles.divider}><View style={styles.line}/><Text style={styles.or}>or continue with email</Text><View style={styles.line}/></View></>}
                 <TextField label="Email" value={email} onChangeText={(value) => { setEmail(value); setError(''); }} keyboardType="email-address" placeholder="you@example.com" icon="mail-outline" error={error || undefined} returnKeyType="go" onSubmitEditing={() => void handleEmail()} />
                 <Button label="Continue" onPress={handleEmail} loading={loading === 'email'} />
-                <View style={[styles.signupRow, constrained && styles.signupRowKeyboard]}>
+                <View style={[styles.signupRow, keyboardMode && styles.signupRowKeyboard]}>
                   <Text style={styles.accountText}>New to novo?</Text>
                   <Button label="Sign up" variant="text" onPress={onSignUp} />
                 </View>
@@ -192,11 +192,12 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   page: { flex: 1, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   pageCompact: { justifyContent: 'flex-start', backgroundColor: colors.forestDark },
+  pageCompactKeyboard: { backgroundColor: colors.cream },
   pageWide: { flexDirection: 'row', padding: 24, gap: 0 },
   hero: { width: '100%', maxWidth: 520, backgroundColor: colors.forestDark, padding: 26, overflow: 'hidden' },
   heroCompact: { flex: 1, maxWidth: 560, minHeight: 218, paddingHorizontal: 22, paddingTop: 16, paddingBottom: 22 },
   heroCompactShort: { minHeight: 188, paddingTop: 12, paddingBottom: 16 },
-  heroCompactKeyboard: { flex: 0, height: 104, minHeight: 104, paddingTop: 10, paddingBottom: 10 },
+  heroCompactKeyboard: { flex: 0, height: 84, minHeight: 84, paddingTop: 9, paddingBottom: 9 },
   heroCompactTiny: { minHeight: 150 },
   heroWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopLeftRadius: 32, borderBottomLeftRadius: 32, padding: 42 },
   heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -223,11 +224,11 @@ const styles = StyleSheet.create({
   panel: { position: 'relative', width: '100%', maxWidth: 520, backgroundColor: colors.cream },
   panelCompact: { flexGrow: 0, flexShrink: 0, maxWidth: 560, marginTop: -16, paddingHorizontal: 24, paddingTop: 22, paddingBottom: 18, borderTopLeftRadius: 32, borderTopRightRadius: 32, zIndex: 3, justifyContent: 'flex-start' },
   panelCompactShort: { paddingVertical: 12 },
-  panelCompactKeyboard: { flex: 1, paddingTop: 14, paddingBottom: 14, justifyContent: 'center' },
+  panelCompactKeyboard: { flex: 1, flexGrow: 1, flexBasis: 0, minHeight: 0, marginTop: -12, paddingTop: 20, paddingBottom: 10, justifyContent: 'flex-start' },
   panelCompactTiny: { paddingVertical: 10 },
   panelWide: { width: '50%', maxWidth: 620, minHeight: 720, borderTopRightRadius: 32, borderBottomRightRadius: 32, paddingHorizontal: 70, justifyContent: 'center', shadowColor: colors.shadow, shadowOffset: { width: 0, height: 14 }, shadowOpacity: 0.08, shadowRadius: 30, elevation: 4 },
   panelContent: { width: '100%' },
-  panelContentKeyboard: { flexShrink: 1 },
+  panelContentKeyboard: { flexShrink: 0 },
   panelContentPassword: { maxWidth: 520, alignSelf: 'center' },
   formHeader: { marginBottom: 16 },
   formHeaderKeyboard: { marginBottom: 10 },

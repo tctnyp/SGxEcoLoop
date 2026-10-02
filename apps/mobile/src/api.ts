@@ -193,8 +193,11 @@ export function getAuthProviders(): Promise<Record<OAuthProvider, boolean>> {
 }
 
 export async function warmAppCache(token?: string): Promise<void> {
-  await request<{ ok: boolean }>('/health');
-  await Promise.all([getAuthProviders(), getLocations()]);
+  await Promise.all([
+    request<{ ok: boolean }>('/health'),
+    getAuthProviders(),
+    getLocations(),
+  ]);
   if (!token) return;
   await Promise.allSettled([
     getDailyStatus(token),
