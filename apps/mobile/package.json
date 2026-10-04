@@ -64,10 +64,10 @@
     "three": "^0.170.0"
   },
   "devDependencies": {
-    "@babel/plugin-transform-class-static-block": "^7.29.7",
+    "@babel/plugin-transform-class-static-block": "^8.0.5",
     "@types/react": "~18.3.12",
     "@types/three": "^0.170.0",
-    "typescript": "^5.7.3"
+    "typescript": "^7.0.2"
   },
   "expo": {
     "doctor": {
